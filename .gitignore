@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+dist/
+.codex/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.log
+.env
+.env.*
+.usage-meter.json

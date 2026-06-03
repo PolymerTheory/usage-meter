@@ -1,0 +1,184 @@
+import Foundation
+import XCTest
+@testable import UsageMeterCore
+
+final class LogUsageReaderTests: XCTestCase {
+    func testClaudeUsageTokensAreSummed() throws {
+        let root = try temporaryLogRoot()
+        let log = root.appendingPathComponent("session.jsonl")
+        let line = #"{"timestamp":"2026-06-01T10:00:00.000Z","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":25,"cache_read_input_tokens":10}}}"#
+        try line.write(to: log, atomically: true, encoding: .utf8)
+
+        let events = LogUsageReader().readClaudeEvents(root: root)
+
+        XCTAssertEqual(events, [UsageEvent(timestamp: iso("2026-06-01T10:00:00.000Z"), tokens: 185)])
+    }
+
+    func testSummaryUsesFiveHourAndSevenDayWindows() throws {
+        let reader = LogUsageReader()
+        let now = iso("2026-06-02T12:00:00.000Z")
+        let events = [
+            UsageEvent(timestamp: iso("2026-06-02T11:00:00.000Z"), tokens: 10),
+            UsageEvent(timestamp: iso("2026-06-01T11:00:00.000Z"), tokens: 20),
+            UsageEvent(timestamp: iso("2026-05-20T11:00:00.000Z"), tokens: 30)
+        ]
+
+        let usage = reader.summarize(
+            provider: .codex,
+            events: events,
+            now: now,
+            shortLimit: 100,
+            longLimit: 100,
+            source: "test"
+        )
+
+        XCTAssertEqual(usage.shortWindow.usedUnits, 10)
+        XCTAssertEqual(usage.longWindow.usedUnits, 30)
+        XCTAssertEqual(usage.shortWindow.fractionUsed, 0.1)
+        XCTAssertEqual(usage.longWindow.fractionUsed, 0.3)
+    }
+
+    func testCodexRateLimitSnapshotIsPreferredWhenPresent() throws {
+        let root = try temporaryLogRoot()
+        let log = root.appendingPathComponent("session.jsonl")
+        let line = #"{"timestamp":"2026-06-01T10:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}},"rate_limits":{"primary":{"used_percent":17.5,"window_minutes":300,"resets_at":1780318800},"secondary":{"used_percent":6,"window_minutes":10080,"resets_at":1780837200},"plan_type":"pro"}}}"#
+        try line.write(to: log, atomically: true, encoding: .utf8)
+
+        let usage = try XCTUnwrap(LogUsageReader().readLatestCodexRateLimit(root: root))
+
+        XCTAssertEqual(usage.provider, .codex)
+        XCTAssertEqual(usage.shortWindow.label, "5h")
+        XCTAssertEqual(usage.shortWindow.displayPercent, 17.5)
+        XCTAssertEqual(usage.shortWindow.fractionUsed, 0.175)
+        XCTAssertFalse(usage.shortWindow.isEstimated)
+        XCTAssertEqual(usage.longWindow.label, "7d")
+        XCTAssertEqual(usage.longWindow.displayPercent, 6)
+    }
+
+    func testCodexRateLimitPastResetDatesAreDiscarded() throws {
+        let root = try temporaryLogRoot()
+        let log = root.appendingPathComponent("session.jsonl")
+        let expiredReset = Int(isoPlain("2026-06-02T11:00:00Z").timeIntervalSince1970)
+        let futureReset = Int(isoPlain("2026-06-07T12:00:00Z").timeIntervalSince1970)
+        let line = #"{"timestamp":"2026-06-02T10:00:00.000Z","type":"event_msg","payload":{"rate_limits":{"primary":{"used_percent":56,"window_minutes":300,"resets_at":\#(expiredReset)},"secondary":{"used_percent":36,"window_minutes":10080,"resets_at":\#(futureReset)},"plan_type":"plus"}}}"#
+        try line.write(to: log, atomically: true, encoding: .utf8)
+
+        let usage = try XCTUnwrap(
+            LogUsageReader().readLatestCodexRateLimit(
+                root: root,
+                now: iso("2026-06-02T12:00:00.000Z")
+            )
+        )
+
+        XCTAssertNil(usage.shortWindow.resetDate)
+        XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-07T12:00:00Z"))
+    }
+
+    func testClaudeAPIUsageResponseParsesQuotaWindows() throws {
+        let data = """
+        {
+          "five_hour": {
+            "utilization": 42.5,
+            "resets_at": "2026-06-02T17:00:00Z"
+          },
+          "seven_day": {
+            "utilization": 11,
+            "resets_at": "2026-06-08T17:00:00Z"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ClaudeUsageResponse.self, from: data)
+        let usage = try XCTUnwrap(
+            ClaudeAPIUsageReader.providerUsage(
+                from: response,
+                lastUpdated: iso("2026-06-02T12:00:00.000Z")
+            )
+        )
+
+        XCTAssertEqual(usage.provider, .claude)
+        XCTAssertEqual(usage.shortWindow.label, "5h")
+        XCTAssertEqual(usage.shortWindow.displayPercent, 42.5)
+        XCTAssertEqual(usage.shortWindow.resetDate, isoPlain("2026-06-02T17:00:00Z"))
+        XCTAssertFalse(usage.shortWindow.isEstimated)
+        XCTAssertEqual(usage.longWindow.label, "7d")
+        XCTAssertEqual(usage.longWindow.displayPercent, 11)
+        XCTAssertEqual(usage.source, "Anthropic OAuth usage API")
+    }
+
+    func testClaudeAPIUsageResponseMergesModelSpecificSevenDayWindows() throws {
+        let data = """
+        {
+          "five_hour": {
+            "utilization": 12,
+            "resets_at": "2026-06-02T17:00:00Z"
+          },
+          "seven_day_sonnet": {
+            "utilization": 33,
+            "resets_at": "2026-06-08T19:00:00Z"
+          },
+          "seven_day_opus": {
+            "utilization": 71,
+            "resets_at": "2026-06-08T18:00:00Z"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ClaudeUsageResponse.self, from: data)
+        let usage = try XCTUnwrap(
+            ClaudeAPIUsageReader.providerUsage(
+                from: response,
+                lastUpdated: iso("2026-06-02T12:00:00.000Z")
+            )
+        )
+
+        XCTAssertEqual(usage.longWindow.displayPercent, 71)
+        XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-08T18:00:00Z"))
+    }
+
+    func testConfigLoaderReadsUserLimits() throws {
+        let root = try temporaryLogRoot()
+        let configURL = root.appendingPathComponent(".usage-meter.json")
+        let config = """
+        {
+          "codex": {
+            "shortWindowHours": 6,
+            "longWindowDays": 7,
+            "shortLimitTokens": 111,
+            "longLimitTokens": 222
+          },
+          "claude": {
+            "shortWindowHours": 6,
+            "longWindowDays": 7,
+            "shortLimitTokens": 333,
+            "longLimitTokens": 444
+          }
+        }
+        """
+        try config.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let loaded = UsageConfigLoader().load(home: root)
+
+        XCTAssertEqual(loaded.codex.shortWindowHours, 6)
+        XCTAssertEqual(loaded.codex.shortLimitTokens, 111)
+        XCTAssertEqual(loaded.claude.shortLimitTokens, 333)
+    }
+
+    private func temporaryLogRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func iso(_ value: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)!
+    }
+
+    private func isoPlain(_ value: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)!
+    }
+}

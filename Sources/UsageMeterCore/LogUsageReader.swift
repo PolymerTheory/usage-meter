@@ -1,0 +1,312 @@
+import Foundation
+
+public struct LogUsageReader {
+    public let fileManager: FileManager
+    public let decoder: JSONDecoder
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        self.decoder = JSONDecoder()
+    }
+
+    public func readCodexEvents(root: URL, now: Date = Date()) -> [UsageEvent] {
+        readJSONLines(root: root) { object in
+            guard let timestamp = parseDate(object["timestamp"]) else {
+                return nil
+            }
+
+            let payload = object["payload"] as? [String: Any]
+            let type = object["type"] as? String
+            let role = payload?["role"] as? String
+            let itemType = payload?["type"] as? String
+
+            if type == "event_msg",
+               itemType == "token_count",
+               let info = payload?["info"] as? [String: Any],
+               let lastUsage = info["last_token_usage"] as? [String: Any] {
+                return UsageEvent(timestamp: timestamp, tokens: tokenCount(from: lastUsage))
+            }
+
+            if type == "event_msg",
+               let message = payload?["message"] as? String {
+                return UsageEvent(timestamp: timestamp, tokens: max(1, message.count / 4))
+            }
+
+            if type == "response_item", role == "user" {
+                return UsageEvent(timestamp: timestamp, tokens: inferredTokens(from: payload ?? object))
+            }
+
+            if type == "turn_context" {
+                return UsageEvent(timestamp: timestamp, tokens: 1)
+            }
+
+            return nil
+        }
+    }
+
+    public func readLatestCodexRateLimit(root: URL, now: Date = Date()) -> ProviderUsage? {
+        let snapshots: [CodexRateLimitEvent] = readJSONLines(root: root) { object in
+            guard let timestamp = parseDate(object["timestamp"]),
+                  let payload = object["payload"] as? [String: Any],
+                  let rateLimits = payload["rate_limits"] as? [String: Any],
+                  let primary = rateLimits["primary"] as? [String: Any],
+                  let secondary = rateLimits["secondary"] as? [String: Any] else {
+                return nil
+            }
+
+            let primaryPercent = numeric(primary["used_percent"])
+            let secondaryPercent = numeric(secondary["used_percent"])
+            guard let primaryPercent, let secondaryPercent else {
+                return nil
+            }
+
+            let primaryMinutes = numeric(primary["window_minutes"]) ?? 300
+            let secondaryMinutes = numeric(secondary["window_minutes"]) ?? 10080
+            let planType = rateLimits["plan_type"] as? String
+
+            return CodexRateLimitEvent(
+                timestamp: timestamp,
+                primaryPercent: primaryPercent,
+                primaryMinutes: primaryMinutes,
+                primaryResetDate: resetDate(primary["resets_at"]),
+                secondaryPercent: secondaryPercent,
+                secondaryMinutes: secondaryMinutes,
+                secondaryResetDate: resetDate(secondary["resets_at"]),
+                planType: planType
+            )
+        }
+
+        guard let latest = snapshots.max(by: { $0.timestamp < $1.timestamp }) else {
+            return nil
+        }
+
+        return ProviderUsage(
+            provider: .codex,
+            shortWindow: UsageWindow(
+                label: windowLabel(minutes: latest.primaryMinutes),
+                usedUnits: Int(latest.primaryPercent.rounded()),
+                limitUnits: 100,
+                resetDate: futureResetDate(latest.primaryResetDate, now: now),
+                isEstimated: false,
+                usedPercent: latest.primaryPercent,
+                unitName: "quota"
+            ),
+            longWindow: UsageWindow(
+                label: windowLabel(minutes: latest.secondaryMinutes),
+                usedUnits: Int(latest.secondaryPercent.rounded()),
+                limitUnits: 100,
+                resetDate: futureResetDate(latest.secondaryResetDate, now: now),
+                isEstimated: false,
+                usedPercent: latest.secondaryPercent,
+                unitName: "quota"
+            ),
+            detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "")",
+            source: "~/.codex/sessions rate_limits",
+            lastUpdated: latest.timestamp
+        )
+    }
+
+    public func readClaudeEvents(root: URL, now: Date = Date()) -> [UsageEvent] {
+        readJSONLines(root: root) { object in
+            let timestamp = parseDate(object["timestamp"])
+                ?? parseDate((object["message"] as? [String: Any])?["timestamp"])
+
+            guard let timestamp else {
+                return nil
+            }
+
+            if let message = object["message"] as? [String: Any],
+               let usage = message["usage"] as? [String: Any] {
+                let tokens = tokenCount(from: usage)
+                return UsageEvent(timestamp: timestamp, tokens: max(tokens, 1))
+            }
+
+            if object["type"] as? String == "user" {
+                return UsageEvent(timestamp: timestamp, tokens: 1)
+            }
+
+            return nil
+        }
+    }
+
+    public func summarize(
+        provider: UsageProvider,
+        events: [UsageEvent],
+        now: Date,
+        shortLimit: Int,
+        longLimit: Int,
+        shortWindowHours: Double = 5,
+        longWindowDays: Double = 7,
+        source: String
+    ) -> ProviderUsage {
+        let shortInterval = shortWindowHours * 60 * 60
+        let longInterval = longWindowDays * 24 * 60 * 60
+        let shortStart = now.addingTimeInterval(-shortInterval)
+        let longStart = now.addingTimeInterval(-longInterval)
+        let shortEvents = events.filter { $0.timestamp >= shortStart }
+        let longEvents = events.filter { $0.timestamp >= longStart }
+        let shortUsed = shortEvents.reduce(0) { $0 + $1.tokens }
+        let longUsed = longEvents.reduce(0) { $0 + $1.tokens }
+
+        return ProviderUsage(
+            provider: provider,
+            shortWindow: UsageWindow(
+                label: shortWindowLabel(hours: shortWindowHours),
+                usedUnits: shortUsed,
+                limitUnits: shortLimit,
+                resetDate: shortEvents.map(\.timestamp).min()?.addingTimeInterval(shortInterval),
+                isEstimated: true,
+                unitName: "tokens"
+            ),
+            longWindow: UsageWindow(
+                label: longWindowLabel(days: longWindowDays),
+                usedUnits: longUsed,
+                limitUnits: longLimit,
+                resetDate: longEvents.map(\.timestamp).min()?.addingTimeInterval(longInterval),
+                isEstimated: true,
+                unitName: "tokens"
+            ),
+            detail: "\(events.count) local events, \(longUsed) estimated token units in 7 days",
+            source: source,
+            lastUpdated: now
+        )
+    }
+
+    private func readJSONLines<Event>(root: URL, map: ([String: Any]) -> Event?) -> [Event] {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var events: [Event] = []
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" || fileURL.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let text = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            for line in text.split(separator: "\n") {
+                guard let lineData = String(line).data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let event = map(object) else {
+                    continue
+                }
+                events.append(event)
+            }
+        }
+
+        return events
+    }
+}
+
+private struct CodexRateLimitEvent {
+    let timestamp: Date
+    let primaryPercent: Double
+    let primaryMinutes: Double
+    let primaryResetDate: Date?
+    let secondaryPercent: Double
+    let secondaryMinutes: Double
+    let secondaryResetDate: Date?
+    let planType: String?
+}
+
+private let dateFormatters: [ISO8601DateFormatter] = {
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    return [withFraction, plain]
+}()
+
+private func parseDate(_ value: Any?) -> Date? {
+    guard let string = value as? String else {
+        return nil
+    }
+    for formatter in dateFormatters {
+        if let date = formatter.date(from: string) {
+            return date
+        }
+    }
+    return nil
+}
+
+private func tokenCount(from usage: [String: Any]) -> Int {
+    var total = 0
+    for key in ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"] {
+        if let value = usage[key] as? Int {
+            total += value
+        } else if let value = usage[key] as? Double {
+            total += Int(value)
+        }
+    }
+    return total
+}
+
+private func numeric(_ value: Any?) -> Double? {
+    if let value = value as? Double {
+        return value
+    }
+    if let value = value as? Int {
+        return Double(value)
+    }
+    if let value = value as? String {
+        return Double(value)
+    }
+    return nil
+}
+
+private func resetDate(_ value: Any?) -> Date? {
+    guard let seconds = numeric(value) else {
+        return nil
+    }
+    return Date(timeIntervalSince1970: seconds)
+}
+
+private func futureResetDate(_ date: Date?, now: Date) -> Date? {
+    guard let date, date > now else {
+        return nil
+    }
+    return date
+}
+
+private func windowLabel(minutes: Double) -> String {
+    if minutes >= 24 * 60 {
+        let days = minutes / (24 * 60)
+        return "\(formatNumber(days))d"
+    }
+    if minutes >= 60 {
+        return "\(formatNumber(minutes / 60))h"
+    }
+    return "\(formatNumber(minutes))m"
+}
+
+private func shortWindowLabel(hours: Double) -> String {
+    "\(formatNumber(hours))h"
+}
+
+private func longWindowLabel(days: Double) -> String {
+    "\(formatNumber(days))d"
+}
+
+private func formatNumber(_ value: Double) -> String {
+    if value.rounded() == value {
+        return String(Int(value))
+    }
+    return String(format: "%.1f", value)
+}
+
+private func inferredTokens(from object: [String: Any]) -> Int {
+    if let usage = object["usage"] as? [String: Any] {
+        return tokenCount(from: usage)
+    }
+
+    if let content = object["content"] as? [[String: Any]] {
+        let chars = content.compactMap { $0["text"] as? String }.joined(separator: "\n").count
+        return max(1, chars / 4)
+    }
+
+    return 1
+}
