@@ -195,8 +195,12 @@ struct ProviderView: View {
 
             HStack(spacing: 8) {
                 Text(provider.detail)
-                Spacer()
+                Spacer(minLength: 0)
+                // Give "Updated" priority so it never truncates; detail gets
+                // whatever space remains and truncates gracefully if needed.
                 Text("Updated \(relativeDate(provider.lastUpdated))")
+                    .fixedSize()
+                    .layoutPriority(1)
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

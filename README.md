@@ -2,10 +2,11 @@
 
 A lightweight macOS menu bar app that shows your [Claude](https://claude.ai) and [Codex](https://openai.com/codex) quota at a glance.
 
-<!-- Screenshots: drop docs/menubar.png and docs/popover.png into this repo,
-     then uncomment the lines below.
-![Menu bar icon showing four coloured quota bars](docs/menubar.png)
 ![Popover showing Codex and Claude usage detail](docs/popover.png)
+
+<!-- Menu bar screenshot: drop a cropped screenshot of just the icon in your
+     menu bar into docs/menubar.png and uncomment the line below.
+![Menu bar icon showing four coloured quota bars](docs/menubar.png)
 -->
 
 ## What it does
@@ -45,7 +46,7 @@ The app refreshes every 5 minutes and also on every popover open.
 Or as a one-liner in Terminal:
 
 ```sh
-curl -fsSL https://github.com/YOUR_USERNAME/usage-meter/releases/latest/download/UsageMeter.zip \
+curl -fsSL https://github.com/PolymerTheory/usage-meter/releases/latest/download/UsageMeter.zip \
   -o /tmp/UsageMeter.zip && \
   unzip -o /tmp/UsageMeter.zip -d ~/Applications && \
   open ~/Applications/UsageMeter.app
@@ -60,7 +61,7 @@ curl -fsSL https://github.com/YOUR_USERNAME/usage-meter/releases/latest/download
 Requires Xcode command-line tools (`xcode-select --install`).
 
 ```sh
-git clone https://github.com/YOUR_USERNAME/usage-meter.git
+git clone https://github.com/PolymerTheory/usage-meter.git
 cd usage-meter
 ./script/install_app.sh          # builds release binary, installs to ~/Applications
 open ~/Applications/UsageMeter.app
