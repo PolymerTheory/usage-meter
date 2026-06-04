@@ -1,49 +1,86 @@
 # Usage Meter
 
-Native macOS menu bar prototype for tracking Codex and Claude Code activity.
+A lightweight macOS menu bar app that shows your [Claude](https://claude.ai) and [Codex](https://openai.com/codex) quota at a glance.
+
+<!-- Screenshots: drop docs/menubar.png and docs/popover.png into this repo,
+     then uncomment the lines below.
+![Menu bar icon showing four coloured quota bars](docs/menubar.png)
+![Popover showing Codex and Claude usage detail](docs/popover.png)
+-->
 
 ## What it does
 
-- Adds a visible macOS status-bar item with four vertical bars:
-  - Codex 5-hour activity
-  - Codex 7-day activity
-  - Claude 5-hour activity
-  - Claude 7-day activity
-- Colors bars green, yellow, or red as estimated usage increases.
-- Opens a SwiftUI popover with provider details when clicked.
-- Reads local Codex logs from `~/.codex/sessions`.
-- Uses Codex `rate_limits` snapshots when present, including provider reset
-  times.
-- Uses the Anthropic OAuth usage endpoint for exact Claude quotas when Claude
-  Code credentials are available from `~/.claude/.credentials.json` or the
-  `Claude Code-credentials` Keychain item.
-- Refreshes expired Claude OAuth access tokens when a refresh token is present,
-  and stores the refreshed credentials back to the original credential source.
-- Caches the most recent successful Claude usage response. If Anthropic returns
-  `429`, Usage Meter backs off for one hour and labels cached Claude data as a
-  cached fallback rather than a live reading.
-- Lets you override estimated Codex token limits with `~/.usage-meter.json` if
-  Codex rate-limit snapshots are unavailable.
+Four vertical bars live in your menu bar — green, yellow, or red as usage rises:
 
-## Current limitation
+| Bar | What it shows |
+|-----|---------------|
+| 1 | Codex 5-hour window |
+| 2 | Codex 7-day window |
+| 3 | Claude 5-hour window |
+| 4 | Claude 7-day window |
 
-Codex can be exact when its local logs contain `rate_limits` snapshots. Claude
-can be exact when the Anthropic OAuth usage endpoint is available. If Claude
-credentials expire and a refresh token exists, Usage Meter attempts to refresh
-them automatically. If Anthropic rate-limits usage or token refresh requests,
-the app shows the most recent cached exact response when available and marks it
-as cached. Local Claude JSONL logs are useful for activity history, but they are
-not a reliable quota source and are not used for Claude quota percentages.
+Click the icon to open a detail popover with exact percentages, reset times, and a timestamp showing how fresh the data is. Click anywhere outside to dismiss it.
 
-## Configuration
+**Data sources:**
 
-Optional config path:
+- **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable.
+- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable.
 
-```text
-~/.usage-meter.json
+The app refreshes every 5 minutes and also on every popover open.
+
+## Requirements
+
+- macOS 14 (Sonoma) or later
+- **Claude**: [Claude Code](https://claude.ai/code) installed and signed in — its credentials are used to authenticate the usage API call.
+- **Codex**: [Codex CLI](https://github.com/openai/codex) installed and used at least once (to generate local session logs).
+
+## Install
+
+### Option A — Download pre-built app (easiest)
+
+1. Go to the [Releases page](../../releases) and download `UsageMeter.zip`.
+2. Unzip and move `UsageMeter.app` to `~/Applications` (or `/Applications`).
+3. Open it: `open ~/Applications/UsageMeter.app`
+
+Or as a one-liner in Terminal:
+
+```sh
+curl -fsSL https://github.com/YOUR_USERNAME/usage-meter/releases/latest/download/UsageMeter.zip \
+  -o /tmp/UsageMeter.zip && \
+  unzip -o /tmp/UsageMeter.zip -d ~/Applications && \
+  open ~/Applications/UsageMeter.app
 ```
 
-Example:
+> **First launch note:** macOS may show a security warning because the app
+> isn't notarized. Right-click (or Control-click) `UsageMeter.app` and choose
+> **Open**, then confirm in the dialog. You only need to do this once.
+
+### Option B — Build from source
+
+Requires Xcode command-line tools (`xcode-select --install`).
+
+```sh
+git clone https://github.com/YOUR_USERNAME/usage-meter.git
+cd usage-meter
+./script/install_app.sh          # builds release binary, installs to ~/Applications
+open ~/Applications/UsageMeter.app
+```
+
+Pass `--debug` to build a debug binary instead:
+
+```sh
+./script/install_app.sh --debug
+```
+
+## Usage
+
+UsageMeter runs as a menu bar accessory with no Dock icon. After opening it you should see four small bars appear in your menu bar. Click them to see the detail popover; click anywhere else to dismiss it.
+
+To have it launch at login, add it to **System Settings → General → Login Items**.
+
+## Configuration (optional)
+
+You can override the token limits used for Codex fallback estimates. Create `~/.usage-meter.json`:
 
 ```json
 {
@@ -52,45 +89,45 @@ Example:
     "longWindowDays": 7,
     "shortLimitTokens": 100000,
     "longLimitTokens": 500000
-  },
-  "claude": {
-    "shortWindowHours": 5,
-    "longWindowDays": 7,
-    "shortLimitTokens": 300000,
-    "longLimitTokens": 1500000
   }
 }
 ```
 
-These limits only affect estimated Codex token-log mode. Exact Codex
-`rate_limits` and Anthropic OAuth usage snapshots override token-limit
-estimates.
+These values only affect the estimated token-log mode. Exact Codex `rate_limits` snapshots and the Anthropic OAuth usage API always take priority.
 
-## Build and run
-
-Development build, package, launch, and verify the menu bar item:
+## Uninstall
 
 ```sh
-swift test
-./script/build_and_run.sh --verify
+pkill -x UsageMeter          # quit the app
+rm -rf ~/Applications/UsageMeter.app
+rm -f ~/Library/Caches/UsageMeter/claude-usage.json    # cached Claude data
+rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 ```
 
-After it has been built once, restart the existing app bundle without rebuilding:
+## Known limitations
+
+- **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
+- **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
+- **No Codex live API.** Codex quota is read from local session logs, not a live API call. The snapshot is only as fresh as your last Codex interaction.
+- **Not notarized.** The app is built locally and is not signed with an Apple Developer certificate, so macOS will prompt you to confirm the first launch (see install note above).
+- **macOS 14+ only.** The app uses SwiftUI APIs introduced in Sonoma.
+
+## Building for release / creating a GitHub release
 
 ```sh
-./script/run.sh
+./script/release.sh    # builds and packages dist/UsageMeter.zip
 ```
 
-Install the app into `~/Applications` so it can be launched from Finder,
-Spotlight, Raycast, Alfred, etc.:
+Then upload `dist/UsageMeter.zip` as a release asset on GitHub.
+
+## Development
 
 ```sh
-./script/install_app.sh
+swift test                           # run unit tests
+./script/build_and_run.sh --verify   # build, launch, and confirm menu bar item
+./script/build_and_run.sh --debug --verify   # same with debug binary
 ```
 
-The app runs as a menu bar accessory and does not show a Dock icon.
+## License
 
-## Suggested GitHub Repository
-
-- Name: `usage-meter`
-- Description: `macOS menu bar quota monitor for Codex and Claude usage`
+MIT — see [LICENSE](LICENSE).

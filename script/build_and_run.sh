@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
+# Build and launch UsageMeter.
+#
+# Usage:
+#   ./script/build_and_run.sh              # release build
+#   ./script/build_and_run.sh --debug      # debug build
+#   ./script/build_and_run.sh --verify     # release build + verify launch
+#   ./script/build_and_run.sh --debug --verify
 set -euo pipefail
 
 APP_NAME="UsageMeter"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+EXTRA_ARGS=()
+VERIFY=false
+for arg in "$@"; do
+  case "$arg" in
+    --verify) VERIFY=true ;;
+    *)        EXTRA_ARGS+=("$arg") ;;
+  esac
+done
+
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
   pkill -x "$APP_NAME"
 fi
 
-"$ROOT_DIR/script/package_app.sh"
+"$ROOT_DIR/script/package_app.sh" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 
-if [[ "${1:-}" == "--verify" ]]; then
+if [[ "$VERIFY" == true ]]; then
   rm -f /tmp/UsageMeter-launch.log
   /usr/bin/open -n "$APP_DIR"
   sleep 3

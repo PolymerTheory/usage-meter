@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Build UsageMeter.app and place it in dist/.
+#
+# Usage:
+#   ./script/package_app.sh           # release build (default)
+#   ./script/package_app.sh --debug   # debug build
 set -euo pipefail
 
 APP_NAME="UsageMeter"
@@ -6,7 +11,13 @@ PRODUCT="UsageMeter"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-EXECUTABLE="$ROOT_DIR/.build/debug/$PRODUCT"
+
+BUILD_CONFIG="release"
+for arg in "$@"; do
+  [[ "$arg" == "--debug" ]] && BUILD_CONFIG="debug"
+done
+
+EXECUTABLE="$ROOT_DIR/.build/$BUILD_CONFIG/$PRODUCT"
 
 cd "$ROOT_DIR"
 
@@ -14,7 +25,11 @@ if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 fi
 
-swift build
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  swift build -c release
+else
+  swift build
+fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
