@@ -17,17 +17,23 @@ Native macOS menu bar prototype for tracking Codex and Claude Code activity.
 - Uses the Anthropic OAuth usage endpoint for exact Claude quotas when Claude
   Code credentials are available from `~/.claude/.credentials.json` or the
   `Claude Code-credentials` Keychain item.
+- Refreshes expired Claude OAuth access tokens when a refresh token is present,
+  and stores the refreshed credentials back to the original credential source.
+- Caches the most recent successful Claude usage response. If Anthropic returns
+  `429`, Usage Meter backs off for one hour and labels cached Claude data as a
+  cached fallback rather than a live reading.
 - Lets you override estimated Codex token limits with `~/.usage-meter.json` if
   Codex rate-limit snapshots are unavailable.
 
 ## Current limitation
 
 Codex can be exact when its local logs contain `rate_limits` snapshots. Claude
-can be exact when the Anthropic OAuth usage endpoint is available. If the
-Anthropic usage request fails, credentials are missing/stale, or the endpoint is
-rate-limited, Claude shows quota as unavailable instead of estimating from local
-JSONL logs. Local Claude logs are useful for activity history, but they are not
-a reliable quota source.
+can be exact when the Anthropic OAuth usage endpoint is available. If Claude
+credentials expire and a refresh token exists, Usage Meter attempts to refresh
+them automatically. If Anthropic rate-limits usage or token refresh requests,
+the app shows the most recent cached exact response when available and marks it
+as cached. Local Claude JSONL logs are useful for activity history, but they are
+not a reliable quota source and are not used for Claude quota percentages.
 
 ## Configuration
 

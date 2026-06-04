@@ -34,6 +34,18 @@ Checked on 2026-06-02.
   JSONL data. That is useful for estimates and history, but it is not the exact
   quota source.
 
+## Codex implementation details from GitHub
+
+- AgentBar reads Codex rate-limit snapshots from `~/.codex/sessions`, like this
+  app. Its important freshness behavior is that stale `resets_at` values are
+  advanced by `window_minutes`; once a window has rolled over, the old usage
+  percentage is treated as `0`.
+- ClaudeBar includes a live Codex API probe for
+  `https://chatgpt.com/backend-api/wham/usage` using `~/.codex/auth.json` OAuth
+  credentials. It prefers HTTP headers such as
+  `x-codex-primary-used-percent`/`x-codex-secondary-used-percent`, with response
+  body fallback. This is a possible future improvement over local session logs.
+
 ## Official quota surfaces
 
 - OpenAI's Codex pricing docs say Codex local messages and cloud tasks share a
@@ -51,9 +63,12 @@ small local app tailored to our specific requirements reasonable. The defensible
 architecture is local-first:
 
 1. Use local logs for trend/activity estimates.
-2. Use Codex `rate_limits` snapshots from local session logs when available.
-3. Use Anthropic's OAuth usage endpoint for exact Claude values when Claude
-   Code credentials are available.
-4. Use each CLI's authenticated status/usage command or local RPC as a fallback
+2. Use Codex `rate_limits` snapshots from local session logs when available,
+   while rolling over expired windows to `0` current usage.
+3. Use Anthropic's OAuth usage endpoint for exact Claude values when Claude Code
+   credentials are available; refresh expired OAuth tokens when possible.
+4. Cache exact Claude usage responses, but label them as cached when live API
+   calls are unavailable or rate-limited.
+5. Use each CLI's authenticated status/usage command or local RPC as a fallback
    exact-value path where available.
-5. Avoid browser cookie scraping unless the user explicitly wants that tradeoff.
+6. Avoid browser cookie scraping unless the user explicitly wants that tradeoff.

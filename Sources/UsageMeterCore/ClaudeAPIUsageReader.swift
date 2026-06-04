@@ -38,7 +38,11 @@ public struct ClaudeAPIUsageReader {
     private let timeout: TimeInterval
 
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    private static let refreshURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    private static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private static let scopes = "user:profile user:inference user:sessions:claude_code"
     private static let keychainService = "Claude Code-credentials"
+    private static let refreshBuffer: TimeInterval = 5 * 60
 
     public init(
         session: URLSession = .shared,
@@ -49,34 +53,52 @@ public struct ClaudeAPIUsageReader {
     }
 
     public func readUsage(home: URL, now: Date = Date()) -> ReadResult {
-        guard let credentials = loadCredentials(home: home) else {
-            return cachedUsage(home: home, now: now)
+        guard var credentials = loadCredentials(home: home) else {
+            return cachedUsage(home: home, now: now, fallbackReason: .missingCredentials)
                 ?? .failure(.missingCredentials)
         }
 
-        var request = URLRequest(url: Self.usageURL, timeoutInterval: timeout)
-        request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        if let rateLimit = activeRateLimit(home: home, now: now) {
+            return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
+                ?? .failure(.requestFailed("Claude OAuth usage API rate limited until \(rateLimit)"))
+        }
 
-        let response = fetch(request: request)
+        if credentials.needsRefresh(now: now, refreshBuffer: Self.refreshBuffer) {
+            guard let refreshed = refreshCredentials(credentials, home: home, now: now) else {
+                return cachedUsage(home: home, now: now, fallbackReason: .requestFailed("token refresh unavailable"))
+                    ?? .failure(.requestFailed("token refresh unavailable"))
+            }
+            credentials = refreshed
+        }
+
+        let response = fetchUsage(credentials: credentials)
         switch response {
         case let .success(data):
             guard let decoded = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
-                  let usage = Self.providerUsage(from: decoded, lastUpdated: now) else {
+                  let usage = Self.providerUsage(from: decoded, lastUpdated: now, now: now) else {
                 return .failure(.decodeFailed)
             }
             writeCache(data: data, home: home)
             return .success(usage)
         case .rateLimited:
-            return cachedUsage(home: home, now: now)
+            recordRateLimit(home: home, now: now)
+            return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                 ?? .failure(.rateLimited)
         case let .failure(message):
-            return cachedUsage(home: home, now: now)
+            if message == "HTTP 401" || message == "HTTP 403",
+               let refreshed = refreshCredentials(credentials, home: home, now: now) {
+                return fetchUsageAfterRefresh(refreshed, home: home, now: now)
+            }
+            return cachedUsage(home: home, now: now, fallbackReason: .requestFailed(message))
                 ?? .failure(.requestFailed(message))
         }
     }
 
-    public static func providerUsage(from response: ClaudeUsageResponse, lastUpdated: Date) -> ProviderUsage? {
+    public static func providerUsage(
+        from response: ClaudeUsageResponse,
+        lastUpdated: Date,
+        now: Date? = nil
+    ) -> ProviderUsage? {
         let short = response.mergedWindow(for: "five_hour")
         let long = response.mergedWindow(for: "seven_day")
 
@@ -87,12 +109,14 @@ public struct ClaudeAPIUsageReader {
         let shortWindow = usageWindow(
             label: "5h",
             data: short,
-            fallbackPercent: long?.utilization ?? 0
+            fallbackPercent: long?.utilization ?? 0,
+            now: now
         )
         let longWindow = usageWindow(
             label: "7d",
             data: long,
-            fallbackPercent: short?.utilization ?? 0
+            fallbackPercent: short?.utilization ?? 0,
+            now: now
         )
 
         return ProviderUsage(
@@ -114,7 +138,7 @@ public struct ClaudeAPIUsageReader {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return Self.credentials(from: data)
+        return Self.credentials(from: data, source: .file)
     }
 
     private func loadCredentialsFromKeychain() -> ClaudeCredentials? {
@@ -148,7 +172,118 @@ public struct ClaudeAPIUsageReader {
         }
 
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        return Self.credentials(from: data)
+        return Self.credentials(from: data, source: .keychain)
+    }
+
+    private func fetchUsage(credentials: ClaudeCredentials) -> FetchResult {
+        var request = URLRequest(url: Self.usageURL, timeoutInterval: timeout)
+        request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        return fetch(request: request)
+    }
+
+    private func fetchUsageAfterRefresh(_ credentials: ClaudeCredentials, home: URL, now: Date) -> ReadResult {
+        switch fetchUsage(credentials: credentials) {
+        case let .success(data):
+            guard let decoded = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
+                  let usage = Self.providerUsage(from: decoded, lastUpdated: now, now: now) else {
+                return .failure(.decodeFailed)
+            }
+            writeCache(data: data, home: home)
+            return .success(usage)
+        case .rateLimited:
+            recordRateLimit(home: home, now: now)
+            return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
+                ?? .failure(.rateLimited)
+        case let .failure(message):
+            return cachedUsage(home: home, now: now, fallbackReason: .requestFailed(message))
+                ?? .failure(.requestFailed(message))
+        }
+    }
+
+    private func refreshCredentials(_ credentials: ClaudeCredentials, home: URL, now: Date) -> ClaudeCredentials? {
+        guard let refreshToken = credentials.refreshToken, !refreshToken.isEmpty else {
+            return nil
+        }
+
+        var request = URLRequest(url: Self.refreshURL, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": Self.clientID,
+            "scope": Self.scopes
+        ])
+
+        let response = fetch(request: request)
+        if case .rateLimited = response {
+            recordRateLimit(home: home, now: now)
+        }
+        guard case let .success(data) = response,
+              let refresh = try? JSONDecoder().decode(TokenRefreshResponse.self, from: data),
+              let accessToken = refresh.accessToken,
+              !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        var updated = credentials
+        updated.accessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let refreshToken = refresh.refreshToken, !refreshToken.isEmpty {
+            updated.refreshToken = refreshToken
+        }
+        if let expiresIn = refresh.expiresIn {
+            updated.expiresAt = now.addingTimeInterval(TimeInterval(expiresIn))
+        }
+        saveCredentials(updated, home: home)
+        return updated
+    }
+
+    private func saveCredentials(_ credentials: ClaudeCredentials, home: URL) {
+        var data = credentials.fullData
+        var oauth = data["claudeAiOauth"] as? [String: Any] ?? [:]
+        oauth["accessToken"] = credentials.accessToken
+        if let refreshToken = credentials.refreshToken {
+            oauth["refreshToken"] = refreshToken
+        }
+        if let expiresAt = credentials.expiresAt {
+            oauth["expiresAt"] = expiresAt.timeIntervalSince1970 * 1000
+        }
+        if let subscriptionType = credentials.subscriptionType {
+            oauth["subscriptionType"] = subscriptionType
+        }
+        data["claudeAiOauth"] = oauth
+
+        switch credentials.source {
+        case .file:
+            let url = home.appendingPathComponent(".claude/.credentials.json")
+            if let encoded = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]) {
+                try? encoded.write(to: url, options: [.atomic])
+            }
+        case .keychain:
+            saveCredentialsToKeychain(data)
+        }
+    }
+
+    private func saveCredentialsToKeychain(_ data: [String: Any]) {
+        guard let encoded = try? JSONSerialization.data(withJSONObject: data),
+              let password = String(data: encoded, encoding: .utf8) else {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = [
+            "add-generic-password",
+            "-s", Self.keychainService,
+            "-a", NSUserName(),
+            "-w", password,
+            "-U"
+        ]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private func fetch(request: URLRequest) -> FetchResult {
@@ -181,21 +316,26 @@ public struct ClaudeAPIUsageReader {
         return result
     }
 
-    private func cachedUsage(home: URL, now: Date) -> ReadResult? {
+    private func cachedUsage(home: URL, now: Date, fallbackReason: FailureReason?) -> ReadResult? {
         let url = cacheURL(home: home)
         guard let data = try? Data(contentsOf: url),
               let response = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
               let updated = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-              let usage = Self.providerUsage(from: response, lastUpdated: updated) else {
+              let usage = Self.providerUsage(from: response, lastUpdated: updated, now: now) else {
             return nil
         }
+
+        let detail = [
+            "Cached Claude OAuth usage snapshot",
+            fallbackReason.map { "live API unavailable: \($0.message)" }
+        ].compactMap { $0 }.joined(separator: "; ")
 
         return .success(
             ProviderUsage(
                 provider: usage.provider,
                 shortWindow: usage.shortWindow,
                 longWindow: usage.longWindow,
-                detail: "Cached \(usage.detail)",
+                detail: detail,
                 source: usage.source,
                 lastUpdated: usage.lastUpdated
             )
@@ -215,7 +355,34 @@ public struct ClaudeAPIUsageReader {
         home.appendingPathComponent("Library/Caches/UsageMeter/claude-usage.json")
     }
 
-    private static func credentials(from data: Data) -> ClaudeCredentials? {
+    private func rateLimitURL(home: URL) -> URL {
+        home.appendingPathComponent("Library/Caches/UsageMeter/claude-rate-limit.json")
+    }
+
+    private func activeRateLimit(home: URL, now: Date) -> Date? {
+        let url = rateLimitURL(home: home)
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let until = json["until"] as? Double else {
+            return nil
+        }
+        let date = Date(timeIntervalSince1970: until)
+        return date > now ? date : nil
+    }
+
+    private func recordRateLimit(home: URL, now: Date) {
+        let url = rateLimitURL(home: home)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let payload = ["until": now.addingTimeInterval(60 * 60).timeIntervalSince1970]
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            try? data.write(to: url, options: [.atomic])
+        }
+    }
+
+    private static func credentials(from data: Data, source: CredentialSource) -> ClaudeCredentials? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = json["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String else {
@@ -226,20 +393,43 @@ public struct ClaudeAPIUsageReader {
         guard !trimmed.isEmpty else {
             return nil
         }
-        return ClaudeCredentials(accessToken: trimmed)
+        return ClaudeCredentials(
+            accessToken: trimmed,
+            refreshToken: oauth["refreshToken"] as? String,
+            expiresAt: expiresAt(oauth["expiresAt"]),
+            subscriptionType: oauth["subscriptionType"] as? String,
+            source: source,
+            fullData: json
+        )
+    }
+
+    private static func expiresAt(_ value: Any?) -> Date? {
+        if let value = value as? Double {
+            return Date(timeIntervalSince1970: value / 1000)
+        }
+        if let value = value as? Int {
+            return Date(timeIntervalSince1970: Double(value) / 1000)
+        }
+        if let value = value as? String, let milliseconds = Double(value) {
+            return Date(timeIntervalSince1970: milliseconds / 1000)
+        }
+        return nil
     }
 
     private static func usageWindow(
         label: String,
         data: ClaudeUsageWindow?,
-        fallbackPercent: Double
+        fallbackPercent: Double,
+        now: Date?
     ) -> UsageWindow {
-        let percent = data?.utilization ?? fallbackPercent
+        let resetDate = data?.resetDate
+        let isStale = now.map { current in resetDate.map { $0 <= current } ?? false } ?? false
+        let percent = isStale ? 0 : (data?.utilization ?? fallbackPercent)
         return UsageWindow(
             label: label,
             usedUnits: Int(percent.rounded()),
             limitUnits: 100,
-            resetDate: data?.resetDate,
+            resetDate: isStale ? nil : resetDate,
             isEstimated: false,
             usedPercent: percent,
             unitName: "quota"
@@ -247,14 +437,43 @@ public struct ClaudeAPIUsageReader {
     }
 }
 
-private struct ClaudeCredentials: Equatable, Sendable {
-    let accessToken: String
+private struct ClaudeCredentials {
+    var accessToken: String
+    var refreshToken: String?
+    var expiresAt: Date?
+    var subscriptionType: String?
+    var source: CredentialSource
+    var fullData: [String: Any]
+
+    func needsRefresh(now: Date, refreshBuffer: TimeInterval) -> Bool {
+        guard let expiresAt else {
+            return false
+        }
+        return now.addingTimeInterval(refreshBuffer) >= expiresAt
+    }
+}
+
+private enum CredentialSource: Sendable {
+    case file
+    case keychain
 }
 
 private enum FetchResult: Equatable, Sendable {
     case success(Data)
     case rateLimited
     case failure(String)
+}
+
+private struct TokenRefreshResponse: Decodable {
+    let accessToken: String?
+    let refreshToken: String?
+    let expiresIn: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+    }
 }
 
 public struct ClaudeUsageResponse: Decodable, Equatable, Sendable {
