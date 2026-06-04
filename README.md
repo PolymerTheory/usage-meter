@@ -4,10 +4,7 @@ A lightweight macOS menu bar app that shows your [Claude](https://claude.ai) and
 
 ![Popover showing Codex and Claude usage detail](docs/popover.png)
 
-<!-- Menu bar screenshot: drop a cropped screenshot of just the icon in your
-     menu bar into docs/menubar.png and uncomment the line below.
 ![Menu bar icon showing four coloured quota bars](docs/menubar.png)
--->
 
 ## What it does
 
