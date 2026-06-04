@@ -10,7 +10,8 @@ public struct LogUsageReader {
     }
 
     public func readCodexEvents(root: URL, now: Date = Date()) -> [UsageEvent] {
-        readJSONLines(root: root) { object in
+        let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
+        return readJSONLines(root: root, newerThan: cutoff) { object in
             guard let timestamp = parseDate(object["timestamp"]) else {
                 return nil
             }
@@ -45,7 +46,14 @@ public struct LogUsageReader {
     }
 
     public func readLatestCodexRateLimit(root: URL, now: Date = Date()) -> ProviderUsage? {
-        let snapshots: [CodexRateLimitEvent] = readJSONLines(root: root) { object in
+        // Read newest files first and stop after the first file that contains
+        // any rate_limits snapshot — we only need the single most recent one.
+        let snapshots: [CodexRateLimitEvent] = readJSONLines(
+            root: root,
+            newerThan: nil,
+            sortNewestFirst: true,
+            stopAfterFirstFile: true
+        ) { object in
             guard let timestamp = parseDate(object["timestamp"]),
                   let payload = object["payload"] as? [String: Any],
                   let rateLimits = payload["rate_limits"] as? [String: Any],
@@ -185,29 +193,85 @@ public struct LogUsageReader {
         )
     }
 
-    private func readJSONLines<Event>(root: URL, map: ([String: Any]) -> Event?) -> [Event] {
+    /// Enumerate JSONL/JSON files under `root`, parse each line, and map it
+    /// to an event.
+    ///
+    /// - Parameters:
+    ///   - newerThan: Skip files (and entire directories) whose modification
+    ///     time is before this date. Pass `nil` to read everything.
+    ///   - sortNewestFirst: Sort collected files by mtime descending before
+    ///     reading them. Combined with `stopAfterFirstFile` this lets callers
+    ///     that only need the most-recent result avoid reading old files at all.
+    ///   - stopAfterFirstFile: Stop reading as soon as the first file that
+    ///     produces at least one event has been processed.
+    private func readJSONLines<Event>(
+        root: URL,
+        newerThan: Date? = nil,
+        sortNewestFirst: Bool = false,
+        stopAfterFirstFile: Bool = false,
+        map: ([String: Any]) -> Event?
+    ) -> [Event] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey]
         guard let enumerator = fileManager.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
         ) else {
             return []
         }
 
+        var files: [(url: URL, mtime: Date)] = []
+        for case let url as URL in enumerator {
+            guard let rv = try? url.resourceValues(forKeys: Set(keys)) else {
+                continue
+            }
+            let mtime = rv.contentModificationDate ?? Date.distantPast
+
+            if rv.isDirectory == true {
+                // Skip the entire subtree when the directory hasn't been
+                // touched since before our cutoff — no new files can live there.
+                if let newerThan, mtime < newerThan {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            guard rv.isRegularFile == true,
+                  url.pathExtension == "jsonl" || url.pathExtension == "json" else {
+                continue
+            }
+
+            if let newerThan, mtime < newerThan {
+                continue
+            }
+
+            files.append((url, mtime))
+        }
+
+        if sortNewestFirst {
+            files.sort { $0.mtime > $1.mtime }
+        }
+
         var events: [Event] = []
-        for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" || fileURL.pathExtension == "json" {
+        for (fileURL, _) in files {
             guard let data = try? Data(contentsOf: fileURL),
                   let text = String(data: data, encoding: .utf8) else {
                 continue
             }
 
+            var fileEvents: [Event] = []
             for line in text.split(separator: "\n") {
                 guard let lineData = String(line).data(using: .utf8),
                       let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                       let event = map(object) else {
                     continue
                 }
-                events.append(event)
+                fileEvents.append(event)
+            }
+
+            events.append(contentsOf: fileEvents)
+            if stopAfterFirstFile, !fileEvents.isEmpty {
+                break
             }
         }
 
