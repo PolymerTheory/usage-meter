@@ -80,24 +80,37 @@ public struct LogUsageReader {
             return nil
         }
 
+        let primaryWindow = resolvedRateLimitWindow(
+            usedPercent: latest.primaryPercent,
+            resetDate: latest.primaryResetDate,
+            windowMinutes: latest.primaryMinutes,
+            now: now
+        )
+        let secondaryWindow = resolvedRateLimitWindow(
+            usedPercent: latest.secondaryPercent,
+            resetDate: latest.secondaryResetDate,
+            windowMinutes: latest.secondaryMinutes,
+            now: now
+        )
+
         return ProviderUsage(
             provider: .codex,
             shortWindow: UsageWindow(
                 label: windowLabel(minutes: latest.primaryMinutes),
-                usedUnits: Int(latest.primaryPercent.rounded()),
+                usedUnits: Int(primaryWindow.usedPercent.rounded()),
                 limitUnits: 100,
-                resetDate: futureResetDate(latest.primaryResetDate, now: now),
+                resetDate: primaryWindow.resetDate,
                 isEstimated: false,
-                usedPercent: latest.primaryPercent,
+                usedPercent: primaryWindow.usedPercent,
                 unitName: "quota"
             ),
             longWindow: UsageWindow(
                 label: windowLabel(minutes: latest.secondaryMinutes),
-                usedUnits: Int(latest.secondaryPercent.rounded()),
+                usedUnits: Int(secondaryWindow.usedPercent.rounded()),
                 limitUnits: 100,
-                resetDate: futureResetDate(latest.secondaryResetDate, now: now),
+                resetDate: secondaryWindow.resetDate,
                 isEstimated: false,
-                usedPercent: latest.secondaryPercent,
+                usedPercent: secondaryWindow.usedPercent,
                 unitName: "quota"
             ),
             detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "")",
@@ -265,11 +278,30 @@ private func resetDate(_ value: Any?) -> Date? {
     return Date(timeIntervalSince1970: seconds)
 }
 
-private func futureResetDate(_ date: Date?, now: Date) -> Date? {
-    guard let date, date > now else {
-        return nil
+private func resolvedRateLimitWindow(
+    usedPercent: Double,
+    resetDate: Date?,
+    windowMinutes: Double,
+    now: Date
+) -> (usedPercent: Double, resetDate: Date?) {
+    guard var resetDate else {
+        return (usedPercent, nil)
     }
-    return date
+
+    if resetDate > now {
+        return (usedPercent, resetDate)
+    }
+
+    guard windowMinutes > 0 else {
+        return (0, nil)
+    }
+
+    let windowSeconds = windowMinutes * 60
+    while resetDate <= now {
+        resetDate = resetDate.addingTimeInterval(windowSeconds)
+    }
+
+    return (0, resetDate)
 }
 
 private func windowLabel(minutes: Double) -> String {

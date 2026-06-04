@@ -44,7 +44,12 @@ final class LogUsageReaderTests: XCTestCase {
         let line = #"{"timestamp":"2026-06-01T10:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}},"rate_limits":{"primary":{"used_percent":17.5,"window_minutes":300,"resets_at":1780318800},"secondary":{"used_percent":6,"window_minutes":10080,"resets_at":1780837200},"plan_type":"pro"}}}"#
         try line.write(to: log, atomically: true, encoding: .utf8)
 
-        let usage = try XCTUnwrap(LogUsageReader().readLatestCodexRateLimit(root: root))
+        let usage = try XCTUnwrap(
+            LogUsageReader().readLatestCodexRateLimit(
+                root: root,
+                now: iso("2026-06-01T11:00:00.000Z")
+            )
+        )
 
         XCTAssertEqual(usage.provider, .codex)
         XCTAssertEqual(usage.shortWindow.label, "5h")
@@ -55,7 +60,7 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.displayPercent, 6)
     }
 
-    func testCodexRateLimitPastResetDatesAreDiscarded() throws {
+    func testCodexRateLimitPastResetDatesRollOverToZeroUsage() throws {
         let root = try temporaryLogRoot()
         let log = root.appendingPathComponent("session.jsonl")
         let expiredReset = Int(isoPlain("2026-06-02T11:00:00Z").timeIntervalSince1970)
@@ -70,7 +75,9 @@ final class LogUsageReaderTests: XCTestCase {
             )
         )
 
-        XCTAssertNil(usage.shortWindow.resetDate)
+        XCTAssertEqual(usage.shortWindow.displayPercent, 0)
+        XCTAssertEqual(usage.shortWindow.resetDate, isoPlain("2026-06-02T16:00:00Z"))
+        XCTAssertEqual(usage.longWindow.displayPercent, 36)
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-07T12:00:00Z"))
     }
 
