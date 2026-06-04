@@ -284,8 +284,10 @@ enum MeterIconRenderer {
         let maxHeight: CGFloat = 14.0
 
         for (index, value) in values.enumerated() {
-            let height = max(2, maxHeight * CGFloat(value))
             let x = 2 + CGFloat(index) * (barWidth + gap)
+            // An unknown window (nil) renders as a short gray stub so the user
+            // can tell quota data is missing rather than reading it as "empty".
+            let height = value.map { max(2, maxHeight * CGFloat($0)) } ?? 3
             let rect = NSRect(x: x, y: baseline, width: barWidth, height: height)
             color(for: value).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
@@ -296,18 +298,31 @@ enum MeterIconRenderer {
         return image
     }
 
-    private static func iconValues(snapshot: UsageSnapshot) -> [Double] {
+    /// Returns the fraction used for each bar, or nil when the value is unknown
+    /// (provider missing or quota unavailable) so the icon can distinguish
+    /// "unknown" from a genuine zero.
+    private static func iconValues(snapshot: UsageSnapshot) -> [Double?] {
         let codex = snapshot.providers.first { $0.provider == .codex }
         let claude = snapshot.providers.first { $0.provider == .claude }
         return [
-            codex?.shortWindow.fractionUsed ?? 0,
-            codex?.longWindow.fractionUsed ?? 0,
-            claude?.shortWindow.fractionUsed ?? 0,
-            claude?.longWindow.fractionUsed ?? 0
+            value(codex?.shortWindow),
+            value(codex?.longWindow),
+            value(claude?.shortWindow),
+            value(claude?.longWindow)
         ]
     }
 
-    private static func color(for value: Double) -> NSColor {
+    private static func value(_ window: UsageWindow?) -> Double? {
+        guard let window, window.unitName != "unavailable" else {
+            return nil
+        }
+        return window.fractionUsed
+    }
+
+    private static func color(for value: Double?) -> NSColor {
+        guard let value else {
+            return NSColor.systemGray
+        }
         switch value {
         case 0..<0.55:
             return NSColor.systemGreen

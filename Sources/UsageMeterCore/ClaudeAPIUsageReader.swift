@@ -304,7 +304,7 @@ public struct ClaudeAPIUsageReader {
                 result = .rateLimited
                 return
             }
-            guard (200..<300).contains(httpResponse.statusCode), let data else {
+            guard (200..<300).contains(httpResponse.statusCode), let data, !data.isEmpty else {
                 result = .failure("HTTP \(httpResponse.statusCode)")
                 return
             }
@@ -312,7 +312,12 @@ public struct ClaudeAPIUsageReader {
         }
         task.resume()
 
-        _ = semaphore.wait(timeout: .now() + timeout)
+        // Wait slightly longer than the request's own timeout so the URLSession
+        // error path reports the real failure; only fall back to a hard cancel
+        // if the callback never fires.
+        if semaphore.wait(timeout: .now() + timeout + 2) == .timedOut {
+            task.cancel()
+        }
         return result
     }
 
@@ -496,22 +501,42 @@ public struct ClaudeUsageResponse: Decodable, Equatable, Sendable {
         self.windows = windows
     }
 
+    /// Feature-specific 7-day buckets that are not part of the Claude Code
+    /// subscription quota the meter cares about. They are excluded from the
+    /// merge so an unrelated bucket cannot drive the displayed percentage.
+    private static let ignoredWindowSuffixes = ["oauth_apps", "cowork", "omelette", "promotional"]
+
+    /// Combine the base window (e.g. `seven_day`) with any model-specific
+    /// variants (e.g. `seven_day_opus`, `seven_day_sonnet`) and report the
+    /// most-constrained one. The Anthropic usage endpoint returns *both* the
+    /// aggregate window and the per-model windows simultaneously; on Max/Pro
+    /// plans the per-model (often Opus) window is usually the binding limit,
+    /// so taking the base value alone under-reports real usage.
     public func mergedWindow(for baseKey: String) -> ClaudeUsageWindow? {
+        let prefix = "\(baseKey)_"
+        var candidates: [ClaudeUsageWindow] = []
+
         if let exact = windows[baseKey] {
-            return exact
+            candidates.append(exact)
         }
 
-        let prefix = "\(baseKey)_"
-        let candidates = windows
-            .filter { $0.key.hasPrefix(prefix) }
-            .map(\.value)
+        for (key, window) in windows where key.hasPrefix(prefix) {
+            let suffix = String(key.dropFirst(prefix.count))
+            if Self.ignoredWindowSuffixes.contains(where: { suffix.contains($0) }) {
+                continue
+            }
+            candidates.append(window)
+        }
 
         guard !candidates.isEmpty else {
             return nil
         }
 
-        let utilization = candidates.map(\.utilization).max() ?? 0
-        let reset = candidates.compactMap(\.resetDate).min()
+        // The binding window is the one closest to its limit. Prefer its own
+        // reset time; fall back to the earliest future reset if it lacks one.
+        let binding = candidates.max(by: { $0.utilization < $1.utilization })
+        let utilization = binding?.utilization ?? 0
+        let reset = binding?.resetDate ?? candidates.compactMap(\.resetDate).min()
 
         return ClaudeUsageWindow(utilization: utilization, resetsAt: reset?.iso8601String)
     }

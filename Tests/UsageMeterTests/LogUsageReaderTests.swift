@@ -143,6 +143,35 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-08T18:00:00Z"))
     }
 
+    func testClaudeAPIUsageMergesPerModelWindowEvenWhenBaseSevenDayPresent() throws {
+        // Real Anthropic responses include the aggregate `seven_day` window AND
+        // per-model windows at the same time. The binding limit (here Opus at
+        // 88%) must win over the low aggregate, and unrelated feature buckets
+        // must be ignored.
+        let data = """
+        {
+          "five_hour": { "utilization": 6.0, "resets_at": "2026-06-04T18:10:00.729501+00:00" },
+          "seven_day": { "utilization": 4.0, "resets_at": "2026-06-08T18:00:00Z" },
+          "seven_day_opus": { "utilization": 88.0, "resets_at": "2026-06-09T10:00:00Z" },
+          "seven_day_sonnet": { "utilization": 20.0, "resets_at": "2026-06-09T11:00:00Z" },
+          "seven_day_cowork": { "utilization": 99.0, "resets_at": "2026-06-09T12:00:00Z" },
+          "extra_usage": { "is_enabled": false, "utilization": null }
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ClaudeUsageResponse.self, from: data)
+        let usage = try XCTUnwrap(
+            ClaudeAPIUsageReader.providerUsage(
+                from: response,
+                lastUpdated: iso("2026-06-04T12:00:00.000Z")
+            )
+        )
+
+        XCTAssertEqual(usage.shortWindow.displayPercent, 6.0)
+        XCTAssertEqual(usage.longWindow.displayPercent, 88.0)
+        XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-09T10:00:00Z"))
+    }
+
     func testConfigLoaderReadsUserLimits() throws {
         let root = try temporaryLogRoot()
         let configURL = root.appendingPathComponent(".usage-meter.json")
