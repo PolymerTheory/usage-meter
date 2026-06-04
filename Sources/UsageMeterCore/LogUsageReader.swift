@@ -121,9 +121,9 @@ public struct LogUsageReader {
                 usedPercent: secondaryWindow.usedPercent,
                 unitName: "quota"
             ),
-            detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "")",
+            detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "") • log \(relativeAge(of: latest.timestamp, now: now))",
             source: "~/.codex/sessions rate_limits",
-            lastUpdated: latest.timestamp
+            lastUpdated: now
         )
     }
 
@@ -392,6 +392,14 @@ private func formatNumber(_ value: Double) -> String {
         return String(Int(value))
     }
     return String(format: "%.1f", value)
+}
+
+private func relativeAge(of date: Date, now: Date) -> String {
+    let seconds = now.timeIntervalSince(date)
+    if seconds < 90 { return "just now" }
+    if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+    let hours = Int(seconds / 3600)
+    return "\(hours)h ago"
 }
 
 private func inferredTokens(from object: [String: Any]) -> Int {

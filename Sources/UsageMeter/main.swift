@@ -190,6 +190,26 @@ struct UnavailableProviderView: View {
     }
 }
 
+/// A simple horizontal progress bar drawn with explicit colors, bypassing
+/// the unreliable `.tint()` modifier on macOS ProgressView.
+struct UsageBar: View {
+    let fraction: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.secondary.opacity(0.18))
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(color)
+                    .frame(width: max(0, geo.size.width * CGFloat(min(fraction, 1.0))))
+            }
+        }
+        .frame(height: 6)
+    }
+}
+
 struct WindowRow: View {
     let window: UsageWindow
 
@@ -200,8 +220,7 @@ struct WindowRow: View {
                     .frame(width: 32, alignment: .leading)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                ProgressView(value: window.fractionUsed)
-                    .tint(color)
+                UsageBar(fraction: window.fractionUsed, color: color)
                 Text(percentLabel)
                     .frame(width: 76, alignment: .trailing)
                     .font(.caption.monospacedDigit())
