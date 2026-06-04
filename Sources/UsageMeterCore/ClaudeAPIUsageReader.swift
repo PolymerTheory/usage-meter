@@ -381,7 +381,9 @@ public struct ClaudeAPIUsageReader {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let payload = ["until": now.addingTimeInterval(60 * 60).timeIntervalSince1970]
+        // Back off for one refresh cycle (5 min) rather than a full hour so
+        // that a transient 429 doesn't suppress updates for an extended period.
+        let payload = ["until": now.addingTimeInterval(5 * 60).timeIntervalSince1970]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: url, options: [.atomic])
         }

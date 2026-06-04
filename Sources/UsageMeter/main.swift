@@ -3,10 +3,14 @@ import SwiftUI
 import UsageMeterCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private let model = UsageViewModel()
+    /// Global mouse-down monitor installed while the popover is open so that
+    /// clicking anywhere outside it dismisses it. (.transient behavior is
+    /// unreliable for accessory-policy apps that never become the active app.)
+    private var outsideClickMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LaunchDiagnostics.write("applicationDidFinishLaunching")
@@ -15,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureStatusButton(with: .empty)
 
-        popover.behavior = .transient
+        popover.behavior = .applicationDefined   // we manage dismissal manually
+        popover.delegate = self
         popover.contentSize = NSSize(width: 380, height: 390)
         popover.contentViewController = NSHostingController(rootView: UsagePopoverView(model: model))
 
@@ -48,16 +53,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePopover() {
-        guard let button = statusItem.button else {
-            return
-        }
+        guard let button = statusItem.button else { return }
 
         if popover.isShown {
-            popover.performClose(nil)
+            closePopover()
         } else {
             model.refresh()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            installOutsideClickMonitor()
         }
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+        removeOutsideClickMonitor()
+    }
+
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            // Delivered on the main thread; close only if still shown.
+            guard let self, self.popover.isShown else { return }
+            self.closePopover()
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+    }
+
+    // NSPopoverDelegate: clean up the monitor if the popover closes for any
+    // other reason (e.g. Escape key, programmatic close).
+    nonisolated func popoverDidClose(_ notification: Notification) {
+        Task { @MainActor in self.removeOutsideClickMonitor() }
     }
 }
 
@@ -257,8 +290,44 @@ struct WindowRow: View {
         guard let resetDate = window.resetDate else {
             return "reset unknown"
         }
-        return "resets \(relativeDate(resetDate))"
+        let now = Date()
+        let seconds = resetDate.timeIntervalSince(now)
+        guard seconds > 0 else { return "resetting…" }
+
+        // Compact countdown: "47m", "1h 57m", "6d 2h"
+        let totalMinutes = Int(seconds / 60)
+        let hours        = Int(seconds / 3600)
+        let days         = hours / 24
+        let countdown: String
+        if days >= 1 {
+            countdown = "\(days)d \(hours - days * 24)h"
+        } else if hours >= 1 {
+            countdown = "\(hours)h \(totalMinutes - hours * 60)m"
+        } else {
+            countdown = "\(totalMinutes)m"
+        }
+
+        // Absolute clock time, plus day name when the reset is on a different day
+        let timeStr = Self.resetTimeFormatter.string(from: resetDate)
+        if Calendar.current.isDateInToday(resetDate) {
+            return "resets \(timeStr) (\(countdown))"
+        } else {
+            let dayStr = Self.resetDayFormatter.string(from: resetDate)
+            return "resets \(dayStr) \(timeStr) (\(countdown))"
+        }
     }
+
+    // Formatters are reused across redraws — DateFormatter init is expensive.
+    private static let resetTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"   // "9:05" not "09:05"
+        return f
+    }()
+    private static let resetDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE"    // "Mon", "Fri", …
+        return f
+    }()
 
     private var color: Color {
         switch window.fractionUsed {
