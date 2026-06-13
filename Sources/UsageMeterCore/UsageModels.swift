@@ -51,6 +51,9 @@ public struct ProviderUsage: Equatable, Sendable {
     public let detail: String
     public let source: String
     public let lastUpdated: Date
+    /// True when session log files for this provider were modified within the
+    /// last two minutes — a reliable proxy for "currently doing inference".
+    public let isActive: Bool
 
     public init(
         provider: UsageProvider,
@@ -58,7 +61,8 @@ public struct ProviderUsage: Equatable, Sendable {
         longWindow: UsageWindow,
         detail: String,
         source: String,
-        lastUpdated: Date
+        lastUpdated: Date,
+        isActive: Bool = false
     ) {
         self.provider = provider
         self.shortWindow = shortWindow
@@ -66,6 +70,7 @@ public struct ProviderUsage: Equatable, Sendable {
         self.detail = detail
         self.source = source
         self.lastUpdated = lastUpdated
+        self.isActive = isActive
     }
 
     public var isUnavailable: Bool {

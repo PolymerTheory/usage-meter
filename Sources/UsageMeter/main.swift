@@ -180,6 +180,11 @@ struct ProviderView: View {
             HStack {
                 Text(provider.provider.rawValue)
                     .font(.subheadline.weight(.semibold))
+                if provider.isActive {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                }
                 Spacer()
                 Text(provider.source)
                     .font(.caption2)
@@ -383,6 +388,22 @@ enum MeterIconRenderer {
             let rect = NSRect(x: x, y: baseline, width: barWidth, height: height)
             color(for: value).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+        }
+
+        // Activity dots: a small filled circle at the base of each provider's
+        // bar pair when that provider has written session logs in the last 2 min.
+        let codex  = snapshot.providers.first { $0.provider == .codex }
+        let claude = snapshot.providers.first { $0.provider == .claude }
+        let dotY: CGFloat = 0.5
+        let dotR: CGFloat = 1.0
+        // Codex bars are at indices 0 and 1; Claude at 2 and 3.
+        for (isActive, barIndex) in [(codex?.isActive == true, 0), (claude?.isActive == true, 2)] {
+            guard isActive else { continue }
+            let x0 = 2 + CGFloat(barIndex) * (barWidth + gap)
+            let x1 = 2 + CGFloat(barIndex + 1) * (barWidth + gap) + barWidth
+            let cx  = (x0 + x1) / 2
+            NSColor.white.withAlphaComponent(0.95).setFill()
+            NSBezierPath(ovalIn: NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)).fill()
         }
 
         image.unlockFocus()

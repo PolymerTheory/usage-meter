@@ -18,12 +18,21 @@ public final class UsageMonitor {
         self.configLoader = configLoader
     }
 
+    /// A session log file modified within this window is treated as an
+    /// active session rather than recent-but-idle history.
+    private static let activityWindow: TimeInterval = 2 * 60
+
     public func snapshot(now: Date = Date()) -> UsageSnapshot {
         let config = configLoader.load(home: home)
         let codexRoot = home.appendingPathComponent(".codex/sessions")
+        let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
+
+        // Activity check: look for log files modified within the last 2 minutes.
+        let codexActive  = reader.hasRecentActivity(in: codexRoot,      within: Self.activityWindow, now: now)
+        let claudeActive = reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
 
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
-        let codexUsage = reader.readLatestCodexRateLimit(root: codexRoot, now: now)
+        var codexUsage = reader.readLatestCodexRateLimit(root: codexRoot, now: now)
             ?? reader.summarize(
                 provider: .codex,
                 events: codexEvents,
@@ -34,17 +43,30 @@ public final class UsageMonitor {
                 longWindowDays: config.codex.longWindowDays,
                 source: "~/.codex/sessions"
             )
+        codexUsage = ProviderUsage(
+            provider: codexUsage.provider,
+            shortWindow: codexUsage.shortWindow,
+            longWindow: codexUsage.longWindow,
+            detail: codexUsage.detail,
+            source: codexUsage.source,
+            lastUpdated: codexUsage.lastUpdated,
+            isActive: codexActive
+        )
 
         let claudeResult = claudeAPIReader.readUsage(home: home, now: now)
-        let claudeUsage = claudeResult.usage
+        var claudeUsage = claudeResult.usage
             ?? unavailableClaudeUsage(reason: claudeResult.failureReason, now: now)
+        claudeUsage = ProviderUsage(
+            provider: claudeUsage.provider,
+            shortWindow: claudeUsage.shortWindow,
+            longWindow: claudeUsage.longWindow,
+            detail: claudeUsage.detail,
+            source: claudeUsage.source,
+            lastUpdated: claudeUsage.lastUpdated,
+            isActive: claudeActive
+        )
 
-        let providers = [
-            codexUsage,
-            claudeUsage
-        ]
-
-        return UsageSnapshot(providers: providers, generatedAt: now)
+        return UsageSnapshot(providers: [codexUsage, claudeUsage], generatedAt: now)
     }
 
     private func unavailableClaudeUsage(

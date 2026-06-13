@@ -9,6 +9,30 @@ public struct LogUsageReader {
         self.decoder = JSONDecoder()
     }
 
+    /// Returns true when any file under `root` was modified within `seconds`
+    /// of `now`. Stops on the first match, skipping entire subdirectories
+    /// that are clearly too old, so this is fast even on large trees.
+    public func hasRecentActivity(in root: URL, within seconds: TimeInterval, now: Date = Date()) -> Bool {
+        let cutoff = now.addingTimeInterval(-seconds)
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey]
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+
+        for case let url as URL in enumerator {
+            guard let rv = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            let mtime = rv.contentModificationDate ?? .distantPast
+            if rv.isDirectory == true {
+                if mtime < cutoff { enumerator.skipDescendants() }
+                continue
+            }
+            if mtime >= cutoff { return true }
+        }
+        return false
+    }
+
     public func readCodexEvents(root: URL, now: Date = Date()) -> [UsageEvent] {
         let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
         return readJSONLines(root: root, newerThan: cutoff) { object in
