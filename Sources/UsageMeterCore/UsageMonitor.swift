@@ -18,11 +18,10 @@ public final class UsageMonitor {
         self.configLoader = configLoader
     }
 
-    /// A session log file modified within this window is treated as an
-    /// active session. Long enough to cover the gap between the start of
-    /// an API request and the first response/tool-call log write (~30s
-    /// typical), short enough to clear promptly once the task finishes.
-    private static let activityWindow: TimeInterval = 90
+    /// A session log file modified within this window is treated as an active
+    /// session. 30s clears quickly after a task finishes; brief gaps between
+    /// tool calls may cause the dot to flicker, which is acceptable.
+    private static let activityWindow: TimeInterval = 30
 
     public func snapshot(now: Date = Date()) -> UsageSnapshot {
         let config = configLoader.load(home: home)
