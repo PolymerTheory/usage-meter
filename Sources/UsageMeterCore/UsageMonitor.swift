@@ -19,8 +19,10 @@ public final class UsageMonitor {
     }
 
     /// A session log file modified within this window is treated as an
-    /// active session rather than recent-but-idle history.
-    private static let activityWindow: TimeInterval = 2 * 60
+    /// active session. Long enough to cover the gap between the start of
+    /// an API request and the first response/tool-call log write (~30s
+    /// typical), short enough to clear promptly once the task finishes.
+    private static let activityWindow: TimeInterval = 90
 
     public func snapshot(now: Date = Date()) -> UsageSnapshot {
         let config = configLoader.load(home: home)
