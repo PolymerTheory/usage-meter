@@ -7,13 +7,16 @@ public final class CodexActivityReader: @unchecked Sendable {
     private var lastObservedDone: TimeInterval = 0
     private var sawActiveTurn = false
     private let idleHysteresis: TimeInterval
+    private let unresolvedTurnTimeout: TimeInterval
 
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
-        idleHysteresis: TimeInterval = 4
+        idleHysteresis: TimeInterval = 4,
+        unresolvedTurnTimeout: TimeInterval = 120
     ) {
         self.home = home
         self.idleHysteresis = idleHysteresis
+        self.unresolvedTurnTimeout = unresolvedTurnTimeout
     }
 
     public func isActive(now: Date = Date()) -> Bool? {
@@ -24,20 +27,28 @@ public final class CodexActivityReader: @unchecked Sendable {
             return nil
         }
 
-        let latestDone = max(eventTimes.completed, eventTimes.failed)
-        guard eventTimes.userInput > 0 || latestDone > 0 else {
+        guard eventTimes.started > 0 || eventTimes.busy > 0 || eventTimes.done > 0 else {
             return nil
         }
 
-        if eventTimes.userInput > latestDone {
+        if eventTimes.busy > eventTimes.done,
+           now.timeIntervalSince1970 - eventTimes.busy <= unresolvedTurnTimeout {
             idleCandidateSince = nil
-            lastObservedDone = latestDone
+            lastObservedDone = eventTimes.done
             sawActiveTurn = true
             return true
         }
 
-        if latestDone != lastObservedDone {
-            lastObservedDone = latestDone
+        if eventTimes.started > eventTimes.done,
+           now.timeIntervalSince1970 - eventTimes.started <= unresolvedTurnTimeout {
+            idleCandidateSince = nil
+            lastObservedDone = eventTimes.done
+            sawActiveTurn = true
+            return true
+        }
+
+        if eventTimes.done != lastObservedDone {
+            lastObservedDone = eventTimes.done
             guard sawActiveTurn else {
                 idleCandidateSince = nil
                 return false
@@ -63,11 +74,30 @@ public final class CodexActivityReader: @unchecked Sendable {
 
         let sql = """
         select
-          coalesce(max(case when feedback_log_body like '%codex.op="user_input"%' then ts end), 0),
-          coalesce(max(case when feedback_log_body like '%app-server event: turn/completed%' then ts end), 0),
-          coalesce(max(case when feedback_log_body like '%app-server event: turn/failed%' then ts end), 0)
+          coalesce(max(case
+            when target = 'codex_core::session::turn'
+             and feedback_log_body like '%op.dispatch.user_input%'
+            then ts end), 0),
+          coalesce(max(case
+            when target = 'codex_app_server::outgoing_message'
+             and (
+               feedback_log_body like 'app-server event: item/started%'
+               or feedback_log_body like 'app-server event: item/agentMessage/delta%'
+               or feedback_log_body like 'app-server event: item/commandExecution/outputDelta%'
+               or feedback_log_body like 'app-server event: item/autoApprovalReview/started%'
+             )
+            then ts end), 0),
+          coalesce(max(case
+            when target = 'codex_app_server::outgoing_message'
+             and (
+               feedback_log_body like 'app-server event: turn/completed%'
+               or feedback_log_body like 'app-server event: turn/failed%'
+               or feedback_log_body like 'app-server event: item/completed%'
+               or feedback_log_body like 'app-server event: item/autoApprovalReview/completed%'
+             )
+            then ts end), 0)
         from (
-          select ts, feedback_log_body
+          select ts, target, feedback_log_body
           from logs
           order by id desc
           limit 5000
@@ -80,13 +110,13 @@ public final class CodexActivityReader: @unchecked Sendable {
 
         let fields = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|")
         guard fields.count == 3,
-              let userInput = TimeInterval(fields[0]),
-              let completed = TimeInterval(fields[1]),
-              let failed = TimeInterval(fields[2]) else {
+              let started = TimeInterval(fields[0]),
+              let busy = TimeInterval(fields[1]),
+              let done = TimeInterval(fields[2]) else {
             return nil
         }
 
-        return CodexActivityEventTimes(userInput: userInput, completed: completed, failed: failed)
+        return CodexActivityEventTimes(started: started, busy: busy, done: done)
     }
 
     private func runSQLite(database: URL, sql: String) -> String? {
@@ -114,7 +144,7 @@ public final class CodexActivityReader: @unchecked Sendable {
 }
 
 private struct CodexActivityEventTimes {
-    let userInput: TimeInterval
-    let completed: TimeInterval
-    let failed: TimeInterval
+    let started: TimeInterval
+    let busy: TimeInterval
+    let done: TimeInterval
 }

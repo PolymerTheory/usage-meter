@@ -203,8 +203,9 @@ final class LogUsageReaderTests: XCTestCase {
     func testCodexActivityReaderUsesDesktopAppTurnEvents() throws {
         let home = try temporaryLogRoot()
         let db = try createCodexLogDatabase(home: home)
-        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
-        try insertLog(db: db, ts: 90, body: "app-server event: turn/completed targeted_connections=1")
+        try insertLog(db: db, ts: 100, target: "codex_core::session::turn", body: #"op.dispatch.user_input"#)
+        try insertLog(db: db, ts: 101, target: "codex_app_server::outgoing_message", body: "app-server event: item/started targeted_connections=1")
+        try insertLog(db: db, ts: 90, target: "codex_app_server::outgoing_message", body: "app-server event: turn/completed targeted_connections=1")
 
         let reader = CodexActivityReader(home: home)
 
@@ -214,12 +215,13 @@ final class LogUsageReaderTests: XCTestCase {
     func testCodexActivityReaderKeepsIdleGraceAfterCompletion() throws {
         let home = try temporaryLogRoot()
         let db = try createCodexLogDatabase(home: home)
-        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
+        try insertLog(db: db, ts: 100, target: "codex_core::session::turn", body: #"op.dispatch.user_input"#)
+        try insertLog(db: db, ts: 101, target: "codex_app_server::outgoing_message", body: "app-server event: item/started targeted_connections=1")
 
         let reader = CodexActivityReader(home: home, idleHysteresis: 4)
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 101)), true)
 
-        try insertLog(db: db, ts: 102, body: "app-server event: turn/completed targeted_connections=1")
+        try insertLog(db: db, ts: 102, target: "codex_app_server::outgoing_message", body: "app-server event: turn/completed targeted_connections=1")
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 102)), true)
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 105)), true)
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 107)), false)
@@ -228,12 +230,35 @@ final class LogUsageReaderTests: XCTestCase {
     func testCodexActivityReaderDoesNotTreatOldCompletionAsActiveOnStartup() throws {
         let home = try temporaryLogRoot()
         let db = try createCodexLogDatabase(home: home)
-        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
-        try insertLog(db: db, ts: 101, body: "app-server event: turn/completed targeted_connections=1")
+        try insertLog(db: db, ts: 100, target: "codex_core::session::turn", body: #"op.dispatch.user_input"#)
+        try insertLog(db: db, ts: 101, target: "codex_app_server::outgoing_message", body: "app-server event: turn/completed targeted_connections=1")
 
         let reader = CodexActivityReader(home: home, idleHysteresis: 4)
 
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 500)), false)
+    }
+
+    func testCodexActivityReaderStopsStaleUnresolvedTurns() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home)
+        try insertLog(db: db, ts: 100, target: "codex_core::session::turn", body: #"op.dispatch.user_input"#)
+        try insertLog(db: db, ts: 101, target: "codex_app_server::outgoing_message", body: "app-server event: item/started targeted_connections=1")
+
+        let reader = CodexActivityReader(home: home, unresolvedTurnTimeout: 120)
+
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 150)), true)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 300)), false)
+    }
+
+    func testCodexActivityReaderIgnoresTelemetryTextOnOtherTargets() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home)
+        try insertLog(db: db, ts: 100, target: "log", body: #"diagnostic text codex.op="user_input" app-server event: item/started"#)
+        try insertLog(db: db, ts: 101, target: "codex_otel.log_only", body: "app-server event: item/commandExecution/outputDelta")
+
+        let reader = CodexActivityReader(home: home)
+
+        XCTAssertNil(reader.isActive(now: Date(timeIntervalSince1970: 102)))
     }
 
     private func temporaryLogRoot() throws -> URL {
@@ -250,15 +275,17 @@ final class LogUsageReaderTests: XCTestCase {
         create table logs (
           id integer primary key,
           ts integer not null,
+          target text not null default 'log',
           feedback_log_body text
         );
         """)
         return db
     }
 
-    private func insertLog(db: URL, ts: Int, body: String) throws {
+    private func insertLog(db: URL, ts: Int, target: String = "log", body: String) throws {
+        let escapedTarget = target.replacingOccurrences(of: "'", with: "''")
         let escaped = body.replacingOccurrences(of: "'", with: "''")
-        try runSQLite(db: db, sql: "insert into logs (ts, feedback_log_body) values (\(ts), '\(escaped)');")
+        try runSQLite(db: db, sql: "insert into logs (ts, target, feedback_log_body) values (\(ts), '\(escapedTarget)', '\(escaped)');")
     }
 
     private func runSQLite(db: URL, sql: String) throws {

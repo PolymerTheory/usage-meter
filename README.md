@@ -27,7 +27,7 @@ Click the icon to open a detail popover with exact percentages, reset times, and
 **Data sources:**
 
 - **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable.
-- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable. The Codex activity dot reads `~/.codex/sqlite/logs_2.sqlite` and compares `user_input` events against `turn/completed` or `turn/failed` events, with a short idle grace period to avoid flicker.
+- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable. The Codex activity dot reads target-scoped desktop events from `~/.codex/sqlite/logs_2.sqlite`, uses recent app-server output or unresolved turn starts as the busy signal, and applies a timeout plus a short idle grace period so a missing completion event cannot leave the dot stuck on indefinitely.
 
 Quota data refreshes every 5 minutes and also on every popover open. Activity
 dots refresh about once per second.
