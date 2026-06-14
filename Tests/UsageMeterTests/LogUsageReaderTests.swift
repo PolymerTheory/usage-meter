@@ -200,10 +200,76 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(loaded.claude.shortLimitTokens, 333)
     }
 
+    func testCodexActivityReaderUsesDesktopAppTurnEvents() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home)
+        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
+        try insertLog(db: db, ts: 90, body: "app-server event: turn/completed targeted_connections=1")
+
+        let reader = CodexActivityReader(home: home)
+
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 101)), true)
+    }
+
+    func testCodexActivityReaderKeepsIdleGraceAfterCompletion() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home)
+        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
+
+        let reader = CodexActivityReader(home: home, idleHysteresis: 4)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 101)), true)
+
+        try insertLog(db: db, ts: 102, body: "app-server event: turn/completed targeted_connections=1")
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 102)), true)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 105)), true)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 107)), false)
+    }
+
+    func testCodexActivityReaderDoesNotTreatOldCompletionAsActiveOnStartup() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home)
+        try insertLog(db: db, ts: 100, body: #"codex.op="user_input""#)
+        try insertLog(db: db, ts: 101, body: "app-server event: turn/completed targeted_connections=1")
+
+        let reader = CodexActivityReader(home: home, idleHysteresis: 4)
+
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 500)), false)
+    }
+
     private func temporaryLogRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
+    }
+
+    private func createCodexLogDatabase(home: URL) throws -> URL {
+        let dir = home.appendingPathComponent(".codex/sqlite", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let db = dir.appendingPathComponent("logs_2.sqlite")
+        try runSQLite(db: db, sql: """
+        create table logs (
+          id integer primary key,
+          ts integer not null,
+          feedback_log_body text
+        );
+        """)
+        return db
+    }
+
+    private func insertLog(db: URL, ts: Int, body: String) throws {
+        let escaped = body.replacingOccurrences(of: "'", with: "''")
+        try runSQLite(db: db, sql: "insert into logs (ts, feedback_log_body) values (\(ts), '\(escaped)');")
+    }
+
+    private func runSQLite(db: URL, sql: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [db.path, sql]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
     }
 
     private func iso(_ value: String) -> Date {

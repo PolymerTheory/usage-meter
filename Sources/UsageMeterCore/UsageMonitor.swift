@@ -1,7 +1,8 @@
 import Foundation
 
-public final class UsageMonitor {
+public final class UsageMonitor: @unchecked Sendable {
     private let reader: LogUsageReader
+    private let codexActivityReader: CodexActivityReader
     private let claudeAPIReader: ClaudeAPIUsageReader
     private let configLoader: UsageConfigLoader
     private let home: URL
@@ -9,18 +10,19 @@ public final class UsageMonitor {
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         reader: LogUsageReader = LogUsageReader(),
+        codexActivityReader: CodexActivityReader? = nil,
         claudeAPIReader: ClaudeAPIUsageReader = ClaudeAPIUsageReader(),
         configLoader: UsageConfigLoader = UsageConfigLoader()
     ) {
         self.home = home
         self.reader = reader
+        self.codexActivityReader = codexActivityReader ?? CodexActivityReader(home: home)
         self.claudeAPIReader = claudeAPIReader
         self.configLoader = configLoader
     }
 
-    /// A session log file modified within this window is treated as an active
-    /// session. 30s clears quickly after a task finishes; brief gaps between
-    /// tool calls may cause the dot to flicker, which is acceptable.
+    /// Claude activity is still an mtime fallback until the Claude Code app
+    /// signal is tested separately.
     private static let activityWindow: TimeInterval = 30
 
     public func snapshot(now: Date = Date()) -> UsageSnapshot {
@@ -28,8 +30,7 @@ public final class UsageMonitor {
         let codexRoot = home.appendingPathComponent(".codex/sessions")
         let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
 
-        // Activity check: look for log files modified within the last 2 minutes.
-        let codexActive  = reader.hasRecentActivity(in: codexRoot,      within: Self.activityWindow, now: now)
+        let codexActive = isCodexActive(codexRoot: codexRoot, now: now)
         let claudeActive = reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
 
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
@@ -68,6 +69,20 @@ public final class UsageMonitor {
         )
 
         return UsageSnapshot(providers: [codexUsage, claudeUsage], generatedAt: now)
+    }
+
+    public func activityStates(now: Date = Date()) -> [UsageProvider: Bool] {
+        let codexRoot = home.appendingPathComponent(".codex/sessions")
+        let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
+        return [
+            .codex: isCodexActive(codexRoot: codexRoot, now: now),
+            .claude: reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
+        ]
+    }
+
+    private func isCodexActive(codexRoot: URL, now: Date) -> Bool {
+        codexActivityReader.isActive(now: now)
+            ?? reader.hasRecentActivity(in: codexRoot, within: Self.activityWindow, now: now)
     }
 
     private func unavailableClaudeUsage(

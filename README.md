@@ -17,14 +17,20 @@ Four vertical bars live in your menu bar — green, yellow, or red as usage rise
 | 3 | Claude 5-hour window |
 | 4 | Claude 7-day window |
 
+Small dots under the bars show whether the corresponding agent appears to be
+actively processing a turn. The Codex dot is driven by live Codex desktop
+app-server events; the Claude dot is still a conservative local-log fallback
+until the Claude Code app signal is tested separately.
+
 Click the icon to open a detail popover with exact percentages, reset times, and a timestamp showing how fresh the data is. Click anywhere outside to dismiss it.
 
 **Data sources:**
 
 - **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable.
-- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable.
+- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable. The Codex activity dot reads `~/.codex/sqlite/logs_2.sqlite` and compares `user_input` events against `turn/completed` or `turn/failed` events, with a short idle grace period to avoid flicker.
 
-The app refreshes every 5 minutes and also on every popover open.
+Quota data refreshes every 5 minutes and also on every popover open. Activity
+dots refresh about once per second.
 
 ## Requirements
 
@@ -107,6 +113,7 @@ rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 - **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
 - **No Codex live API.** Codex quota is read from local session logs, not a live API call. The snapshot is only as fresh as your last Codex interaction.
+- **Activity dots are best-effort.** The Codex dot depends on Codex desktop's local sqlite telemetry format. The Claude dot is still a local-log fallback and is expected to be less reliable until a Claude Code app-specific signal is wired in.
 - **Not notarized.** The app is built locally and is not signed with an Apple Developer certificate, so macOS will prompt you to confirm the first launch (see install note above).
 - **macOS 14+ only.** The app uses SwiftUI APIs introduced in Sonoma.
 

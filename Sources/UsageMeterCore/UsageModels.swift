@@ -51,8 +51,7 @@ public struct ProviderUsage: Equatable, Sendable {
     public let detail: String
     public let source: String
     public let lastUpdated: Date
-    /// True when session log files for this provider were modified within the
-    /// last two minutes — a reliable proxy for "currently doing inference".
+    /// True when this provider appears to be actively processing a turn.
     public let isActive: Bool
 
     public init(

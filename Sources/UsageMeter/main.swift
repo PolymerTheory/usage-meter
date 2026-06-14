@@ -27,11 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         model.onSnapshot = { [weak self] snapshot in
             self?.configureStatusButton(with: snapshot)
         }
-        model.refresh()
+        model.refreshQuota()
 
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.model.refresh()
+                self?.model.refreshQuota()
+            }
+        }
+
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.model.refreshActivity()
             }
         }
     }
@@ -58,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             closePopover()
         } else {
-            model.refresh()
+            model.refreshQuota()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             installOutsideClickMonitor()
         }
@@ -128,14 +134,40 @@ enum UsageMeterMain {
 final class UsageViewModel: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
     var onSnapshot: ((UsageSnapshot) -> Void)?
+    private let monitor = UsageMonitor()
 
-    func refresh() {
+    func refreshQuota() {
         Task {
+            let monitor = self.monitor
             let snapshot = await Task.detached(priority: .utility) {
-                UsageMonitor().snapshot()
+                monitor.snapshot()
             }.value
             self.snapshot = snapshot
             self.onSnapshot?(snapshot)
+        }
+    }
+
+    func refreshActivity() {
+        guard !snapshot.providers.isEmpty else { return }
+        Task {
+            let monitor = self.monitor
+            let states = await Task.detached(priority: .utility) {
+                monitor.activityStates()
+            }.value
+            let updatedProviders = self.snapshot.providers.map { provider in
+                ProviderUsage(
+                    provider: provider.provider,
+                    shortWindow: provider.shortWindow,
+                    longWindow: provider.longWindow,
+                    detail: provider.detail,
+                    source: provider.source,
+                    lastUpdated: provider.lastUpdated,
+                    isActive: states[provider.provider] ?? provider.isActive
+                )
+            }
+            let updatedSnapshot = UsageSnapshot(providers: updatedProviders, generatedAt: self.snapshot.generatedAt)
+            self.snapshot = updatedSnapshot
+            self.onSnapshot?(updatedSnapshot)
         }
     }
 }
@@ -149,7 +181,7 @@ struct UsagePopoverView: View {
                 Text("AI Usage")
                     .font(.headline)
                 Spacer()
-                Button(action: model.refresh) {
+                Button(action: model.refreshQuota) {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
