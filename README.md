@@ -46,9 +46,24 @@ dots refresh about once per second.
 2. Unzip and move `UsageMeter.app` to `~/Applications` (or `/Applications`).
 3. Open it: `open ~/Applications/UsageMeter.app`
 
-> **First launch note:** macOS may show a security warning because the app
-> isn't notarized. Right-click (or Control-click) `UsageMeter.app` and choose
-> **Open**, then confirm in the dialog. You only need to do this once.
+> **First launch note:** This build is not notarized. After attempting to open
+> it once, go to **System Settings → Privacy & Security**, scroll to
+> **Security**, and click **Open Anyway** beside UsageMeter. Authenticate and
+> confirm **Open**. Apple makes this option available for about one hour after
+> the blocked launch attempt.
+
+If **Open Anyway** is unavailable and you built or downloaded UsageMeter from
+this repository yourself, verify the bundle and remove only its quarantine
+attribute:
+
+```sh
+codesign --verify --deep --strict --verbose=2 /Applications/UsageMeter.app
+xattr -dr com.apple.quarantine /Applications/UsageMeter.app
+open /Applications/UsageMeter.app
+```
+
+Use `~/Applications/UsageMeter.app` instead if that is where you installed it.
+Do not use this workaround for apps from an untrusted source.
 
 ### Option B — Build from source
 
