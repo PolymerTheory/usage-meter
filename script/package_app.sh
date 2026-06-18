@@ -11,6 +11,8 @@ PRODUCT="UsageMeter"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
+VERSION="${USAGE_METER_VERSION:-0.2.0}"
+BUILD_NUMBER="${USAGE_METER_BUILD_NUMBER:-200}"
 
 BUILD_CONFIG="release"
 for arg in "$@"; do
@@ -31,7 +33,7 @@ else
 fi
 
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Frameworks" "$APP_DIR/Contents/Resources"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   /usr/bin/lipo -create \
     "$ROOT_DIR/.build/arm64-apple-macosx/release/$PRODUCT" \
@@ -40,6 +42,19 @@ if [[ "$BUILD_CONFIG" == "release" ]]; then
 else
   cp "$ROOT_DIR/.build/debug/$PRODUCT" "$APP_DIR/Contents/MacOS/$APP_NAME"
 fi
+
+SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build/artifacts" -path '*/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' -type d -print -quit 2>/dev/null)"
+if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "Sparkle.framework was not found. Run 'swift package resolve' first." >&2
+  exit 1
+fi
+cp -R "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/"
+SPARKLE_ROOT="${SPARKLE_FRAMEWORK%%/Sparkle.xcframework/*}"
+if [[ ! -f "$SPARKLE_ROOT/LICENSE" ]]; then
+  echo "Sparkle license was not found at $SPARKLE_ROOT/LICENSE" >&2
+  exit 1
+fi
+cp "$SPARKLE_ROOT/LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,7 +65,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>
   <string>UsageMeter</string>
   <key>CFBundleIdentifier</key>
-  <string>local.usagemeter.prototype</string>
+  <string>io.github.PolymerTheory.UsageMeter</string>
   <key>CFBundleName</key>
   <string>UsageMeter</string>
   <key>CFBundleDisplayName</key>
@@ -58,9 +73,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>__VERSION__</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>__BUILD_NUMBER__</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key>
@@ -69,9 +84,32 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://raw.githubusercontent.com/PolymerTheory/usage-meter/main/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>__SPARKLE_PUBLIC_KEY__</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
 </dict>
 </plist>
 PLIST
+
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
+if [[ -z "$SPARKLE_PUBLIC_KEY" && -f "$ROOT_DIR/.sparkle-public-key" ]]; then
+  SPARKLE_PUBLIC_KEY="$(tr -d '\n' < "$ROOT_DIR/.sparkle-public-key")"
+fi
+if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
+  echo "Missing Sparkle public key. Run Sparkle's generate_keys tool first." >&2
+  exit 1
+fi
+
+/usr/bin/sed -i '' \
+  -e "s/__VERSION__/$VERSION/g" \
+  -e "s/__BUILD_NUMBER__/$BUILD_NUMBER/g" \
+  -e "s/__SPARKLE_PUBLIC_KEY__/$SPARKLE_PUBLIC_KEY/g" \
+  "$APP_DIR/Contents/Info.plist"
 
 # Ad-hoc signing gives the bundle a consistent local signature. The app is not
 # notarized, so first launch still requires the documented macOS confirmation.

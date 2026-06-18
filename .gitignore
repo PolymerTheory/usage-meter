@@ -9,6 +9,7 @@ DerivedData/
 *.log
 .env
 .env.*
+.sparkle-private-key
 .usage-meter.json
 # Internal research/notes — not for public consumption
 RESEARCH.md

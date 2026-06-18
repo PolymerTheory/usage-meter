@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import UsageMeterCore
 
@@ -7,6 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private let model = UsageViewModel()
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
     /// Global mouse-down monitor installed while the popover is open so that
     /// clicking anywhere outside it dismisses it. (.transient behavior is
     /// unreliable for accessory-policy apps that never become the active app.)
@@ -22,7 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.behavior = .applicationDefined   // we manage dismissal manually
         popover.delegate = self
         popover.contentSize = NSSize(width: 380, height: 390)
-        popover.contentViewController = NSHostingController(rootView: UsagePopoverView(model: model))
+        popover.contentViewController = NSHostingController(
+            rootView: UsagePopoverView(
+                model: model,
+                checkForUpdates: { [weak self] in
+                    self?.updaterController.checkForUpdates(nil)
+                }
+            )
+        )
 
         model.onSnapshot = { [weak self] snapshot in
             self?.configureStatusButton(with: snapshot)
@@ -254,6 +267,7 @@ final class UsageViewModel: ObservableObject {
 
 struct UsagePopoverView: View {
     @ObservedObject var model: UsageViewModel
+    let checkForUpdates: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -261,6 +275,11 @@ struct UsagePopoverView: View {
                 Text("AI Usage")
                     .font(.headline)
                 Spacer()
+                Button(action: checkForUpdates) {
+                    Image(systemName: "arrow.down.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Check for Updates")
                 Button(action: model.refreshQuota) {
                     Image(systemName: "arrow.clockwise")
                 }

@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>UsageMeter</title>
+        <item>
+            <title>0.2.0</title>
+            <pubDate>Thu, 18 Jun 2026 13:39:40 +0200</pubDate>
+            <link>https://github.com/PolymerTheory/usage-meter</link>
+            <sparkle:version>200</sparkle:version>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/PolymerTheory/usage-meter/releases/download/v0.2.0/UsageMeter.zip" length="1528479" type="application/octet-stream" sparkle:edSignature="x5EwN5xztMA5AyRvvbysWXtH7dZGTuLhXIqDhaZK059ENBeFUn9vArWwgdZ3y8qj2NMy8Bmf3AEAVFDVudFGAw=="/>
+        </item>
+    </channel>
+</rss>

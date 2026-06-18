@@ -46,20 +46,6 @@ dots refresh about once per second.
 2. Unzip and move `UsageMeter.app` to `~/Applications` (or `/Applications`).
 3. Open it: `open ~/Applications/UsageMeter.app`
 
-For a private repository, authenticate GitHub CLI and download the release:
-
-```sh
-gh auth login
-gh release download v0.1.0 \
-  --repo PolymerTheory/usage-meter \
-  --pattern UsageMeter.zip \
-  --dir /tmp && \
-  unzip -o /tmp/UsageMeter.zip -d ~/Applications && \
-  open ~/Applications/UsageMeter.app
-```
-
-The shorter anonymous `curl` download works only if the repository is public.
-
 > **First launch note:** macOS may show a security warning because the app
 > isn't notarized. Right-click (or Control-click) `UsageMeter.app` and choose
 > **Open**, then confirm in the dialog. You only need to do this once.
@@ -93,6 +79,10 @@ other Claude settings or hooks. Existing Claude Code sessions may need to be
 restarted once after enabling the integration.
 
 To have it launch at login, add it to **System Settings → General → Login Items**.
+
+UsageMeter checks for updates daily. Use the down-arrow button in the popover
+to check immediately. Sparkle verifies every downloaded update with the
+project's EdDSA signing key before replacing the app.
 
 ## Configuration (optional)
 
@@ -144,9 +134,16 @@ print credentials, prompts, or conversation content.
 ## Building for release / creating a GitHub release
 
 ```sh
-./script/release.sh                   # build dist/UsageMeter.zip
-./script/release.sh --publish v0.1.0  # push main and create a GitHub release
+./script/release.sh v0.2.0            # build and sign the archive/feed
+./script/release.sh --publish v0.2.0  # push feed and create GitHub release
 ```
+
+Do not rebuild between these commands. The publish step verifies and uploads
+the exact archive signed by the preparation step.
+
+Release signing uses the private EdDSA key stored in the maintainer's macOS
+Keychain. The corresponding public key is tracked in `.sparkle-public-key`.
+Never export or commit the private key.
 
 ## Development
 
@@ -159,3 +156,6 @@ swift test                           # run unit tests
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+The distributed app embeds [Sparkle](https://sparkle-project.org/) 2.9.3 under
+its MIT license; the license text is included inside the app bundle.
