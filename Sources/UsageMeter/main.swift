@@ -55,7 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.title = ""
         button.toolTip = "UsageMeter: Codex and Claude quota"
         statusItem.length = 28
-        LaunchDiagnostics.write("configured status button title=\(button.title) frame=\(button.frame)")
+        let activeProviders = snapshot.providers
+            .filter(\.isActive)
+            .map { $0.provider.rawValue }
+            .joined(separator: ",")
+        LaunchDiagnostics.write(
+            "configured status button title=\(button.title) frame=\(button.frame) active=\(activeProviders)"
+        )
     }
 
     @objc private func togglePopover() {
