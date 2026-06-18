@@ -27,7 +27,7 @@ Click the icon to open a detail popover with exact percentages, reset times, and
 **Data sources:**
 
 - **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable. Its activity dot uses [Claude Code hooks](https://code.claude.com/docs/en/hooks) for prompt, tool, stop, failure, permission, and idle events.
-- **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable. The Codex activity dot reads target-scoped desktop events from `~/.codex/sqlite/logs_2.sqlite`, uses recent app-server output or unresolved turn starts as the busy signal, and applies a timeout plus a short idle grace period so a missing completion event cannot leave the dot stuck on indefinitely.
+- **Codex** — reads exact `codex.rate_limits` messages from the current `~/.codex/logs_2.sqlite` database. It also supports legacy `~/.codex/sqlite/logs_2.sqlite` and `~/.codex/sessions` snapshots, with token-counting estimates as the final fallback. The activity dot selects the freshest database and supports both modern response-stream pulses and legacy app-server events.
 
 Quota data refreshes every 5 minutes and also on every popover open. Activity
 dots refresh about once per second.
@@ -35,8 +35,8 @@ dots refresh about once per second.
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- **Claude**: [Claude Code](https://claude.ai/code) installed and signed in — its credentials are used to authenticate the usage API call.
-- **Codex**: [Codex CLI](https://github.com/openai/codex) installed and used at least once (to generate local session logs).
+- **Claude**: Claude Code in the [Claude desktop app](https://claude.ai/download) or CLI, signed in locally.
+- **Codex**: The [Codex desktop app](https://openai.com/codex) or CLI, signed in and used at least once.
 
 ## Install
 
@@ -67,8 +67,10 @@ Requires Xcode command-line tools (`xcode-select --install`).
 git clone https://github.com/PolymerTheory/usage-meter.git
 cd usage-meter
 ./script/install_app.sh          # builds release binary, installs to ~/Applications
-open ~/Applications/UsageMeter.app
 ```
+
+The script installs Claude activity hooks and launches UsageMeter when the
+build finishes.
 
 Pass `--debug` to build a debug binary instead:
 
@@ -117,10 +119,22 @@ rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 
 - **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
-- **No Codex live API.** Codex quota is read from local session logs, not a live API call. The snapshot is only as fresh as your last Codex interaction.
+- **No separate Codex API call.** Codex quota is read from local database/session events, so the snapshot is only as fresh as the most recent Codex activity.
 - **Activity dots are best-effort.** The Codex dot depends on Codex desktop's local sqlite telemetry format. The Claude dot is deterministic when Claude Code lifecycle hooks fire, with a less precise local-log fallback before hooks are enabled.
 - **Not notarized.** The app is built locally and is not signed with an Apple Developer certificate, so macOS will prompt you to confirm the first launch (see install note above).
 - **macOS 14+ only.** The app uses SwiftUI APIs introduced in Sonoma.
+
+## Troubleshooting
+
+If either provider shows unavailable data, run the privacy-safe diagnostics
+command and include its output in a bug report:
+
+```sh
+~/Applications/UsageMeter.app/Contents/MacOS/UsageMeter --diagnose
+```
+
+The report lists detected data locations and provider errors, but does not
+print credentials, prompts, or conversation content.
 
 ## Building for release / creating a GitHub release
 

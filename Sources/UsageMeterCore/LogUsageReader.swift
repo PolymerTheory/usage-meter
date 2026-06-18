@@ -113,6 +113,75 @@ public struct LogUsageReader {
             return nil
         }
 
+        return codexUsage(
+            from: latest,
+            source: "~/.codex/sessions rate_limits",
+            now: now
+        )
+    }
+
+    public func readLatestCodexDatabaseRateLimit(home: URL, now: Date = Date()) -> ProviderUsage? {
+        for database in CodexDataLocations.logDatabases(home: home) {
+            let sql = """
+            select ts, feedback_log_body
+            from logs
+            where (
+                target = 'codex_api::endpoint::responses_websocket'
+                and feedback_log_body like '%websocket event: {"type":"codex.rate_limits"%'
+              ) or (
+                target = 'log'
+                and feedback_log_body like 'Received message {"type":"codex.rate_limits"%'
+              )
+            order by id desc
+            limit 1;
+            """
+            guard let output = runSQLite(database: database, sql: sql),
+                  let separator = output.firstIndex(of: "\t"),
+                  let timestamp = TimeInterval(output[..<separator]) else {
+                continue
+            }
+
+            let body = String(output[output.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let marker = body.range(of: #"{"type":"codex.rate_limits""#),
+                  let data = String(body[marker.lowerBound...]).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rateLimits = object["rate_limits"] as? [String: Any],
+                  let primary = rateLimits["primary"] as? [String: Any],
+                  let secondary = rateLimits["secondary"] as? [String: Any],
+                  let primaryPercent = numeric(primary["used_percent"]),
+                  let secondaryPercent = numeric(secondary["used_percent"]) else {
+                continue
+            }
+
+            let event = CodexRateLimitEvent(
+                timestamp: Date(timeIntervalSince1970: timestamp),
+                primaryPercent: primaryPercent,
+                primaryMinutes: numeric(primary["window_minutes"]) ?? 300,
+                primaryResetDate: resetDate(primary["reset_at"] ?? primary["resets_at"]),
+                secondaryPercent: secondaryPercent,
+                secondaryMinutes: numeric(secondary["window_minutes"]) ?? 10080,
+                secondaryResetDate: resetDate(secondary["reset_at"] ?? secondary["resets_at"]),
+                planType: object["plan_type"] as? String
+            )
+            return codexUsage(
+                from: event,
+                source: database.path.hasSuffix("/sqlite/logs_2.sqlite")
+                    ? "~/.codex/sqlite/logs_2.sqlite"
+                    : "~/.codex/logs_2.sqlite",
+                now: now
+            )
+        }
+
+        return nil
+    }
+
+    private func codexUsage(
+        from latest: CodexRateLimitEvent,
+        source: String,
+        now: Date
+    ) -> ProviderUsage {
+
         let primaryWindow = resolvedRateLimitWindow(
             usedPercent: latest.primaryPercent,
             resetDate: latest.primaryResetDate,
@@ -147,9 +216,27 @@ public struct LogUsageReader {
                 unitName: "quota"
             ),
             detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "") • log \(relativeAge(of: latest.timestamp, now: now))",
-            source: "~/.codex/sessions rate_limits",
+            source: source,
             lastUpdated: now
         )
+    }
+
+    private func runSQLite(database: URL, sql: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-separator", "\t", database.path, sql]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
     }
 
     public func readClaudeEvents(root: URL, now: Date = Date()) -> [UsageEvent] {

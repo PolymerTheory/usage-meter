@@ -36,7 +36,8 @@ public final class UsageMonitor: @unchecked Sendable {
         let claudeActive = isClaudeActive(claudeLogsRoot: claudeLogsRoot, now: now)
 
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
-        var codexUsage = reader.readLatestCodexRateLimit(root: codexRoot, now: now)
+        var codexUsage = reader.readLatestCodexDatabaseRateLimit(home: home, now: now)
+            ?? reader.readLatestCodexRateLimit(root: codexRoot, now: now)
             ?? reader.summarize(
                 provider: .codex,
                 events: codexEvents,

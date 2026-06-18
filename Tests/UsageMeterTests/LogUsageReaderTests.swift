@@ -261,6 +261,41 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertNil(reader.isActive(now: Date(timeIntervalSince1970: 102)))
     }
 
+    func testCodexActivityReaderUsesModernRootDatabasePulse() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home, modern: true)
+        try insertLog(
+            db: db,
+            ts: 100,
+            target: "codex_api::endpoint::responses_websocket",
+            body: #"session_loop:submission_dispatch{otel.name="op.dispatch.user_input"}"#
+        )
+
+        let reader = CodexActivityReader(home: home, activityPulseWindow: 12)
+
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 105)), true)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 113)), false)
+    }
+
+    func testCodexDatabaseRateLimitParsesModernMessage() throws {
+        let home = try temporaryLogRoot()
+        let db = try createCodexLogDatabase(home: home, modern: true)
+        let message = #"request: websocket event: {"type":"codex.rate_limits","plan_type":"plus","rate_limits":{"primary":{"used_percent":49,"window_minutes":300,"reset_at":500},"secondary":{"used_percent":12,"window_minutes":10080,"reset_at":1000}}}"#
+        try insertLog(db: db, ts: 100, target: "codex_api::endpoint::responses_websocket", body: message)
+
+        let usage = try XCTUnwrap(
+            LogUsageReader().readLatestCodexDatabaseRateLimit(
+                home: home,
+                now: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        XCTAssertEqual(usage.shortWindow.displayPercent, 49)
+        XCTAssertEqual(usage.longWindow.displayPercent, 12)
+        XCTAssertEqual(usage.shortWindow.resetDate, Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(usage.source, "~/.codex/logs_2.sqlite")
+    }
+
     func testClaudeActivityReaderUsesHookStatusAndExpiresStaleBusyState() throws {
         let home = try temporaryLogRoot()
         try ActivityStatusWriter.write(
@@ -327,8 +362,9 @@ final class LogUsageReaderTests: XCTestCase {
         return root
     }
 
-    private func createCodexLogDatabase(home: URL) throws -> URL {
-        let dir = home.appendingPathComponent(".codex/sqlite", isDirectory: true)
+    private func createCodexLogDatabase(home: URL, modern: Bool = false) throws -> URL {
+        let relativePath = modern ? ".codex" : ".codex/sqlite"
+        let dir = home.appendingPathComponent(relativePath, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let db = dir.appendingPathComponent("logs_2.sqlite")
         try runSQLite(db: db, sql: """

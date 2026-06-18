@@ -20,10 +20,9 @@ do not include prompts or transcript content.
 Green means the latest status file says `busy`; gray means `idle`. Claude uses
 recent task/project writes only when no hook status file exists.
 
-For Codex, the probe reads `~/.codex/sqlite/logs_2.sqlite` directly and derives
-busy/idle from Codex desktop app-server turn events. The Codex status file is
-only a fallback. Codex turns busy immediately, then waits 4 seconds after the
-latest completion/failure event before showing idle to avoid brief flicker.
+For Codex, the probe selects the freshest of `~/.codex/logs_2.sqlite` and the
+legacy `~/.codex/sqlite/logs_2.sqlite`. Modern builds use response-stream
+activity pulses; older builds use app-server turn events.
 
 ## Manual smoke test
 

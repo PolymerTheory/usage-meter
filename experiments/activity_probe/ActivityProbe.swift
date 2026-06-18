@@ -59,20 +59,16 @@ final class StatusStore {
 }
 
 final class CodexAppLogReader {
-    private let database: URL
+    private let home = FileManager.default.homeDirectoryForCurrentUser
     private var idleCandidateSince: Date?
     private var lastObservedDone: TimeInterval = 0
     private var sawActiveTurn = false
     private let idleHysteresis: TimeInterval = 4
     private let unresolvedTurnTimeout: TimeInterval = 120
-
-    init() {
-        database = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sqlite/logs_2.sqlite")
-    }
+    private let activityPulseWindow: TimeInterval = 12
 
     func state() -> ProbeState? {
-        guard FileManager.default.fileExists(atPath: database.path) else {
+        guard let database = newestDatabase() else {
             return nil
         }
 
@@ -99,6 +95,14 @@ final class CodexAppLogReader {
                or feedback_log_body like 'app-server event: item/completed%'
                or feedback_log_body like 'app-server event: item/autoApprovalReview/completed%'
              )
+            then ts end), 0),
+          coalesce(max(case
+            when target in (
+              'codex_api::endpoint::responses_websocket',
+              'codex_api::sse::responses',
+              'codex_core::stream_events_utils'
+            )
+             and feedback_log_body like '%submission_dispatch%'
             then ts end), 0)
         from (
           select ts, target, feedback_log_body
@@ -108,26 +112,29 @@ final class CodexAppLogReader {
         );
         """
 
-        guard let output = runSQLite(sql: sql) else {
+        guard let output = runSQLite(database: database, sql: sql) else {
             return nil
         }
 
         let parts = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|")
-        guard parts.count == 3,
+        guard parts.count == 4,
               let latestStarted = TimeInterval(parts[0]),
               let latestBusy = TimeInterval(parts[1]),
-              let latestDone = TimeInterval(parts[2]) else {
+              let latestDone = TimeInterval(parts[2]),
+              let latestPulse = TimeInterval(parts[3]) else {
             return nil
         }
 
-        let newest = max(latestStarted, latestBusy, latestDone)
+        let newest = max(latestStarted, latestBusy, latestDone, latestPulse)
         guard newest > 0 else {
             return nil
         }
 
         let now = Date()
         let isBusy: Bool
-        if latestBusy > latestDone,
+        if latestPulse > 0 {
+            isBusy = now.timeIntervalSince1970 - latestPulse <= activityPulseWindow
+        } else if latestBusy > latestDone,
            now.timeIntervalSince1970 - latestBusy <= unresolvedTurnTimeout {
             idleCandidateSince = nil
             lastObservedDone = latestDone
@@ -170,7 +177,19 @@ final class CodexAppLogReader {
         )
     }
 
-    private func runSQLite(sql: String) -> String? {
+    private func newestDatabase() -> URL? {
+        let candidates = [
+            home.appendingPathComponent(".codex/logs_2.sqlite"),
+            home.appendingPathComponent(".codex/sqlite/logs_2.sqlite")
+        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        return candidates.max { lhs, rhs in
+            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return left < right
+        }
+    }
+
+    private func runSQLite(database: URL, sql: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
         process.arguments = [database.path, sql]

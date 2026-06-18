@@ -153,7 +153,34 @@ enum UsageMeterMain {
             return true
         }
 
+        if arguments == ["--diagnose"] {
+            printDiagnostics()
+            return true
+        }
+
         return false
+    }
+
+    private static func printDiagnostics() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let executablePath = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        print("UsageMeter diagnostics")
+        print("executable: \(executablePath)")
+        print("home: \(home.path)")
+
+        let databases = CodexDataLocations.logDatabases(home: home)
+        print("codex log databases: \(databases.isEmpty ? "none" : databases.map(\.path).joined(separator: ", "))")
+        print("codex sessions: \(FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex/sessions").path) ? "present" : "missing")")
+        print("claude project logs: \(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/projects").path) ? "present" : "missing")")
+        print("claude hooks for this executable: \(ClaudeHookInstaller.isInstalled(executablePath: executablePath, home: home) ? "installed" : "missing")")
+
+        let snapshot = UsageMonitor(home: home).snapshot()
+        for provider in snapshot.providers {
+            let availability = provider.isUnavailable ? "unavailable" : "available"
+            print("\(provider.provider.rawValue.lowercased()) usage: \(availability)")
+            print("  source: \(provider.source)")
+            print("  detail: \(provider.detail)")
+        }
     }
 }
 

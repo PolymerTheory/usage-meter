@@ -15,9 +15,15 @@ TARGET_APP="$INSTALL_DIR/$APP_NAME.app"
 "$ROOT_DIR/script/package_app.sh" "$@"
 
 mkdir -p "$INSTALL_DIR"
+if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+  pkill -x "$APP_NAME"
+fi
 if [[ -d "$TARGET_APP" ]]; then
   rm -rf "$TARGET_APP"
 fi
 cp -R "$SOURCE_APP" "$TARGET_APP"
 
-echo "$TARGET_APP"
+"$TARGET_APP/Contents/MacOS/$APP_NAME" --install-claude-hooks
+/usr/bin/open -n "$TARGET_APP"
+
+echo "Installed and launched: $TARGET_APP"
