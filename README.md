@@ -46,14 +46,19 @@ dots refresh about once per second.
 2. Unzip and move `UsageMeter.app` to `~/Applications` (or `/Applications`).
 3. Open it: `open ~/Applications/UsageMeter.app`
 
-Or as a one-liner in Terminal:
+For a private repository, authenticate GitHub CLI and download the release:
 
 ```sh
-curl -fsSL https://github.com/PolymerTheory/usage-meter/releases/latest/download/UsageMeter.zip \
-  -o /tmp/UsageMeter.zip && \
+gh auth login
+gh release download v0.1.0 \
+  --repo PolymerTheory/usage-meter \
+  --pattern UsageMeter.zip \
+  --dir /tmp && \
   unzip -o /tmp/UsageMeter.zip -d ~/Applications && \
   open ~/Applications/UsageMeter.app
 ```
+
+The shorter anonymous `curl` download works only if the repository is public.
 
 > **First launch note:** macOS may show a security warning because the app
 > isn't notarized. Right-click (or Control-click) `UsageMeter.app` and choose
