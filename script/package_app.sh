@@ -17,8 +17,6 @@ for arg in "$@"; do
   [[ "$arg" == "--debug" ]] && BUILD_CONFIG="debug"
 done
 
-EXECUTABLE="$ROOT_DIR/.build/$BUILD_CONFIG/$PRODUCT"
-
 cd "$ROOT_DIR"
 
 if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
@@ -26,14 +24,22 @@ if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
 fi
 
 if [[ "$BUILD_CONFIG" == "release" ]]; then
-  swift build -c release
+  swift build -c release --arch arm64 --product "$PRODUCT"
+  swift build -c release --arch x86_64 --product "$PRODUCT"
 else
   swift build
 fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
-cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/$APP_NAME"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  /usr/bin/lipo -create \
+    "$ROOT_DIR/.build/arm64-apple-macosx/release/$PRODUCT" \
+    "$ROOT_DIR/.build/x86_64-apple-macosx/release/$PRODUCT" \
+    -output "$APP_DIR/Contents/MacOS/$APP_NAME"
+else
+  cp "$ROOT_DIR/.build/debug/$PRODUCT" "$APP_DIR/Contents/MacOS/$APP_NAME"
+fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -66,5 +72,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# Ad-hoc signing gives the bundle a consistent local signature. The app is not
+# notarized, so first launch still requires the documented macOS confirmation.
+/usr/bin/codesign --force --deep --sign - "$APP_DIR"
+/usr/bin/codesign --verify --deep --strict "$APP_DIR"
 
 echo "$APP_DIR"

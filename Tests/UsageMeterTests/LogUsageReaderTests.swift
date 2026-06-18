@@ -261,6 +261,66 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertNil(reader.isActive(now: Date(timeIntervalSince1970: 102)))
     }
 
+    func testClaudeActivityReaderUsesHookStatusAndExpiresStaleBusyState() throws {
+        let home = try temporaryLogRoot()
+        try ActivityStatusWriter.write(
+            provider: .claude,
+            state: "busy",
+            event: "UserPromptSubmit",
+            home: home,
+            now: Date(timeIntervalSince1970: 100)
+        )
+
+        let reader = ClaudeActivityReader(home: home, maximumBusyAge: 60)
+
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 120)), true)
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 200)), false)
+
+        try ActivityStatusWriter.write(
+            provider: .claude,
+            state: "idle",
+            event: "Stop",
+            home: home,
+            now: Date(timeIntervalSince1970: 201)
+        )
+        XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 202)), false)
+    }
+
+    func testClaudeHookInstallerPreservesExistingSettingsAndHooks() throws {
+        let home = try temporaryLogRoot()
+        let settingsURL = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(
+            at: settingsURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let existing = """
+        {
+          "model": "claude-test",
+          "hooks": {
+            "Stop": [
+              {"hooks": [{"type": "command", "command": "/tmp/existing-hook"}]}
+            ]
+          }
+        }
+        """
+        try existing.write(to: settingsURL, atomically: true, encoding: .utf8)
+
+        try ClaudeHookInstaller.install(executablePath: "/Applications/UsageMeter.app/Contents/MacOS/UsageMeter", home: home)
+
+        let data = try Data(contentsOf: settingsURL)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(root["model"] as? String, "claude-test")
+        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let stopGroups = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
+        XCTAssertEqual(stopGroups.count, 2)
+        XCTAssertTrue(
+            ClaudeHookInstaller.isInstalled(
+                executablePath: "/Applications/UsageMeter.app/Contents/MacOS/UsageMeter",
+                home: home
+            )
+        )
+    }
+
     private func temporaryLogRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

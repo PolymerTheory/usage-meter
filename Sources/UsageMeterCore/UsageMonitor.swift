@@ -3,6 +3,7 @@ import Foundation
 public final class UsageMonitor: @unchecked Sendable {
     private let reader: LogUsageReader
     private let codexActivityReader: CodexActivityReader
+    private let claudeActivityReader: ClaudeActivityReader
     private let claudeAPIReader: ClaudeAPIUsageReader
     private let configLoader: UsageConfigLoader
     private let home: URL
@@ -11,18 +12,19 @@ public final class UsageMonitor: @unchecked Sendable {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         reader: LogUsageReader = LogUsageReader(),
         codexActivityReader: CodexActivityReader? = nil,
+        claudeActivityReader: ClaudeActivityReader? = nil,
         claudeAPIReader: ClaudeAPIUsageReader = ClaudeAPIUsageReader(),
         configLoader: UsageConfigLoader = UsageConfigLoader()
     ) {
         self.home = home
         self.reader = reader
         self.codexActivityReader = codexActivityReader ?? CodexActivityReader(home: home)
+        self.claudeActivityReader = claudeActivityReader ?? ClaudeActivityReader(home: home)
         self.claudeAPIReader = claudeAPIReader
         self.configLoader = configLoader
     }
 
-    /// Claude activity is still an mtime fallback until the Claude Code app
-    /// signal is tested separately.
+    /// Local log activity remains a fallback when Claude hooks are not installed.
     private static let activityWindow: TimeInterval = 30
 
     public func snapshot(now: Date = Date()) -> UsageSnapshot {
@@ -31,7 +33,7 @@ public final class UsageMonitor: @unchecked Sendable {
         let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
 
         let codexActive = isCodexActive(codexRoot: codexRoot, now: now)
-        let claudeActive = reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
+        let claudeActive = isClaudeActive(claudeLogsRoot: claudeLogsRoot, now: now)
 
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
         var codexUsage = reader.readLatestCodexRateLimit(root: codexRoot, now: now)
@@ -76,13 +78,18 @@ public final class UsageMonitor: @unchecked Sendable {
         let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
         return [
             .codex: isCodexActive(codexRoot: codexRoot, now: now),
-            .claude: reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
+            .claude: isClaudeActive(claudeLogsRoot: claudeLogsRoot, now: now)
         ]
     }
 
     private func isCodexActive(codexRoot: URL, now: Date) -> Bool {
         codexActivityReader.isActive(now: now)
             ?? reader.hasRecentActivity(in: codexRoot, within: Self.activityWindow, now: now)
+    }
+
+    private func isClaudeActive(claudeLogsRoot: URL, now: Date) -> Bool {
+        claudeActivityReader.isActive(now: now)
+            ?? reader.hasRecentActivity(in: claudeLogsRoot, within: Self.activityWindow, now: now)
     }
 
     private func unavailableClaudeUsage(

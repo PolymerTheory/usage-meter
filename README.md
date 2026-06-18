@@ -19,14 +19,14 @@ Four vertical bars live in your menu bar — green, yellow, or red as usage rise
 
 Small dots under the bars show whether the corresponding agent appears to be
 actively processing a turn. The Codex dot is driven by live Codex desktop
-app-server events; the Claude dot is still a conservative local-log fallback
-until the Claude Code app signal is tested separately.
+app-server events. The Claude dot uses Claude Code lifecycle hooks when enabled,
+with local project activity as a fallback.
 
 Click the icon to open a detail popover with exact percentages, reset times, and a timestamp showing how fresh the data is. Click anywhere outside to dismiss it.
 
 **Data sources:**
 
-- **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable.
+- **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable. Its activity dot uses [Claude Code hooks](https://code.claude.com/docs/en/hooks) for prompt, tool, stop, failure, permission, and idle events.
 - **Codex** — reads `rate_limits` snapshots from `~/.codex/sessions` (the exact values Codex logs after each interaction). Falls back to token-counting estimates when snapshots are unavailable. The Codex activity dot reads target-scoped desktop events from `~/.codex/sqlite/logs_2.sqlite`, uses recent app-server output or unresolved turn starts as the busy signal, and applies a timeout plus a short idle grace period so a missing completion event cannot leave the dot stuck on indefinitely.
 
 Quota data refreshes every 5 minutes and also on every popover open. Activity
@@ -80,6 +80,11 @@ Pass `--debug` to build a debug binary instead:
 
 UsageMeter runs as a menu bar accessory with no Dock icon. After opening it you should see four small bars appear in your menu bar. Click them to see the detail popover; click anywhere else to dismiss it.
 
+On first launch, click **Enable Claude activity** in the popover. UsageMeter
+merges its lifecycle hooks into `~/.claude/settings.json`; it does not replace
+other Claude settings or hooks. Existing Claude Code sessions may need to be
+restarted once after enabling the integration.
+
 To have it launch at login, add it to **System Settings → General → Login Items**.
 
 ## Configuration (optional)
@@ -113,17 +118,16 @@ rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 - **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
 - **No Codex live API.** Codex quota is read from local session logs, not a live API call. The snapshot is only as fresh as your last Codex interaction.
-- **Activity dots are best-effort.** The Codex dot depends on Codex desktop's local sqlite telemetry format. The Claude dot is still a local-log fallback and is expected to be less reliable until a Claude Code app-specific signal is wired in.
+- **Activity dots are best-effort.** The Codex dot depends on Codex desktop's local sqlite telemetry format. The Claude dot is deterministic when Claude Code lifecycle hooks fire, with a less precise local-log fallback before hooks are enabled.
 - **Not notarized.** The app is built locally and is not signed with an Apple Developer certificate, so macOS will prompt you to confirm the first launch (see install note above).
 - **macOS 14+ only.** The app uses SwiftUI APIs introduced in Sonoma.
 
 ## Building for release / creating a GitHub release
 
 ```sh
-./script/release.sh    # builds and packages dist/UsageMeter.zip
+./script/release.sh                   # build dist/UsageMeter.zip
+./script/release.sh --publish v0.1.0  # push main and create a GitHub release
 ```
-
-Then upload `dist/UsageMeter.zip` as a release asset on GitHub.
 
 ## Development
 

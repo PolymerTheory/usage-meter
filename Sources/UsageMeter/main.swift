@@ -123,18 +123,65 @@ enum UsageMeterMain {
 
     @MainActor
     static func main() {
+        if handleCommandLineMode() {
+            return
+        }
         let app = NSApplication.shared
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         app.run()
+    }
+
+    private static func handleCommandLineMode() -> Bool {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 4, arguments[0] == "--activity-hook", arguments[1] == "claude" {
+            try? ActivityStatusWriter.write(
+                provider: .claude,
+                state: arguments[2],
+                event: arguments[3]
+            )
+            return true
+        }
+
+        if arguments == ["--install-claude-hooks"], let executablePath = Bundle.main.executablePath {
+            do {
+                try ClaudeHookInstaller.install(executablePath: executablePath)
+                print("Claude activity hooks installed")
+            } catch {
+                fputs("Failed to install Claude activity hooks: \(error)\n", stderr)
+            }
+            return true
+        }
+
+        return false
     }
 }
 
 @MainActor
 final class UsageViewModel: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
+    @Published private(set) var claudeHooksInstalled = false
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
+
+    init() {
+        refreshClaudeHookStatus()
+    }
+
+    func installClaudeHooks() {
+        guard let executablePath = Bundle.main.executablePath else { return }
+        do {
+            try ClaudeHookInstaller.install(executablePath: executablePath)
+            refreshClaudeHookStatus()
+        } catch {
+            claudeHooksInstalled = false
+        }
+    }
+
+    private func refreshClaudeHookStatus() {
+        guard let executablePath = Bundle.main.executablePath else { return }
+        claudeHooksInstalled = ClaudeHookInstaller.isInstalled(executablePath: executablePath)
+    }
 
     func refreshQuota() {
         Task {
@@ -186,6 +233,12 @@ struct UsagePopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh")
+            }
+
+            if !model.claudeHooksInstalled {
+                Divider()
+                Button("Enable Claude activity", action: model.installClaudeHooks)
+                    .buttonStyle(.link)
             }
 
             ForEach(model.snapshot.providers, id: \.provider.rawValue) { provider in
