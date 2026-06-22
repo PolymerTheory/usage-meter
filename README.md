@@ -127,7 +127,7 @@ rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 
 ## Known limitations
 
-- **Claude requires Claude Code credentials.** UsageMeter reads the OAuth token that Claude Code writes to `~/.claude/.credentials.json` (or the macOS Keychain). The Claude.ai web app and the Claude desktop app's GUI store their session in an Electron-encrypted format that is not readable by other apps. If Claude shows "OAuth credentials unavailable", run `claude login` in a terminal.
+- **Claude requires Claude Code credentials.** UsageMeter reads the OAuth token that Claude Code writes to `~/.claude/.credentials.json` (or the macOS Keychain). The Claude.ai web app and the Claude desktop app's GUI store their session in an Electron-encrypted format that is not readable by other apps. If Claude shows "OAuth credentials unavailable", install Claude Code (`npm install -g @anthropic-ai/claude-code`) and run `claude login`.
 - **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
 - **No separate Codex API call.** Codex quota is read from local database/session events, so the snapshot is only as fresh as the most recent Codex activity.
