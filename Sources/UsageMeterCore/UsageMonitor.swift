@@ -5,6 +5,7 @@ public final class UsageMonitor: @unchecked Sendable {
     private let codexActivityReader: CodexActivityReader
     private let claudeActivityReader: ClaudeActivityReader
     private let claudeAPIReader: ClaudeAPIUsageReader
+    private let codexAPIReader: CodexAPIUsageReader
     private let configLoader: UsageConfigLoader
     private let home: URL
 
@@ -14,6 +15,7 @@ public final class UsageMonitor: @unchecked Sendable {
         codexActivityReader: CodexActivityReader? = nil,
         claudeActivityReader: ClaudeActivityReader? = nil,
         claudeAPIReader: ClaudeAPIUsageReader = ClaudeAPIUsageReader(),
+        codexAPIReader: CodexAPIUsageReader = CodexAPIUsageReader(),
         configLoader: UsageConfigLoader = UsageConfigLoader()
     ) {
         self.home = home
@@ -21,6 +23,7 @@ public final class UsageMonitor: @unchecked Sendable {
         self.codexActivityReader = codexActivityReader ?? CodexActivityReader(home: home)
         self.claudeActivityReader = claudeActivityReader ?? ClaudeActivityReader(home: home)
         self.claudeAPIReader = claudeAPIReader
+        self.codexAPIReader = codexAPIReader
         self.configLoader = configLoader
     }
 
@@ -36,7 +39,11 @@ public final class UsageMonitor: @unchecked Sendable {
         let claudeActive = isClaudeActive(claudeLogsRoot: claudeLogsRoot, now: now)
 
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
-        var codexUsage = reader.readLatestCodexDatabaseRateLimit(home: home, now: now)
+        // Prefer the live ChatGPT usage API (exact, current). Fall back to
+        // local rate_limit log snapshots (which may be stale) and finally to
+        // token estimates when nothing else is available.
+        var codexUsage = codexAPIReader.readUsage(home: home, now: now)
+            ?? reader.readLatestCodexDatabaseRateLimit(home: home, now: now)
             ?? reader.readLatestCodexRateLimit(root: codexRoot, now: now)
             ?? reader.summarize(
                 provider: .codex,

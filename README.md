@@ -27,7 +27,7 @@ Click the icon to open a detail popover with exact percentages, reset times, and
 **Data sources:**
 
 - **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the credentials that Claude Code stores locally. Refreshes expired OAuth tokens automatically. Falls back to the most recent cached response if the API is unavailable. Its activity dot uses [Claude Code hooks](https://code.claude.com/docs/en/hooks) for prompt, tool, stop, failure, permission, and idle events.
-- **Codex** — reads exact `codex.rate_limits` messages from the current `~/.codex/logs_2.sqlite` database. It also supports legacy `~/.codex/sqlite/logs_2.sqlite` and `~/.codex/sessions` snapshots, with token-counting estimates as the final fallback. The activity dot selects the freshest database and supports both modern response-stream pulses and legacy app-server events.
+- **Codex** — reads the live ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) using the OAuth credentials Codex stores in `~/.codex/auth.json`, so the figures match the Codex dashboard even when Codex has been idle. If the endpoint is unavailable it falls back to the most recent cached response, then to local `codex.rate_limits` log snapshots (`~/.codex/logs_2.sqlite`, legacy `~/.codex/sqlite/logs_2.sqlite`, or `~/.codex/sessions`), and finally to token-counting estimates. The activity dot selects the freshest database and supports both modern response-stream pulses and legacy app-server events.
 
 Quota data refreshes every 5 minutes and also on every popover open. Activity
 dots refresh about once per second.
@@ -114,7 +114,7 @@ You can override the token limits used for Codex fallback estimates. Create `~/.
 }
 ```
 
-These values only affect the estimated token-log mode. Exact Codex `rate_limits` snapshots and the Anthropic OAuth usage API always take priority.
+These values only affect the estimated token-log mode. The live ChatGPT and Anthropic usage APIs (and exact Codex `rate_limits` snapshots) always take priority.
 
 ## Uninstall
 
@@ -128,9 +128,9 @@ rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
 ## Known limitations
 
 - **Claude requires Claude Code credentials.** UsageMeter reads the OAuth token that Claude Code writes to `~/.claude/.credentials.json` (or the macOS Keychain). The Claude.ai web app and the Claude desktop app's GUI store their session in an Electron-encrypted format that is not readable by other apps. If Claude shows "OAuth credentials unavailable", install Claude Code (`npm install -g @anthropic-ai/claude-code`) and run `claude login`.
-- **Unofficial APIs.** Both the Anthropic OAuth usage endpoint and the Codex session log format are undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
+- **Unofficial APIs.** The Anthropic OAuth usage endpoint, the ChatGPT usage endpoint, and the Codex log format are all undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
-- **No separate Codex API call.** Codex quota is read from local database/session events, so the snapshot is only as fresh as the most recent Codex activity.
+- **Codex usage lag when offline.** Codex quota is normally live (via the ChatGPT usage endpoint). If that endpoint can't be reached, the app falls back to local log snapshots, which are only as fresh as the most recent Codex activity; such values are shown with a leading `~`.
 - **Activity dots are best-effort.** The Codex dot depends on Codex desktop's local sqlite telemetry format. The Claude dot is deterministic when Claude Code lifecycle hooks fire, with a less precise local-log fallback before hooks are enabled.
 - **Not notarized.** The app is built locally and is not signed with an Apple Developer certificate, so macOS will prompt you to confirm the first launch (see install note above).
 - **macOS 14+ only.** The app uses SwiftUI APIs introduced in Sonoma.

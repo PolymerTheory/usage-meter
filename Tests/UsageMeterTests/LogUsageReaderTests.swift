@@ -118,6 +118,57 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertTrue(usage.longWindow.isStale)
     }
 
+    func testCodexAPIUsageParsesLiveWindows() throws {
+        let data = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "allowed": true,
+            "primary_window": {
+              "used_percent": 22,
+              "limit_window_seconds": 18000,
+              "reset_at": 1782249854
+            },
+            "secondary_window": {
+              "used_percent": 98,
+              "limit_window_seconds": 604800,
+              "reset_at": 1782383540
+            }
+          }
+        }
+        """.data(using: .utf8)!
+
+        let usage = try XCTUnwrap(
+            CodexAPIUsageReader.providerUsage(
+                from: data,
+                now: iso("2026-06-02T12:00:00.000Z"),
+                stale: false
+            )
+        )
+
+        XCTAssertEqual(usage.provider, .codex)
+        XCTAssertEqual(usage.shortWindow.label, "5h")
+        XCTAssertEqual(usage.shortWindow.displayPercent, 22)
+        XCTAssertFalse(usage.shortWindow.isStale)
+        XCTAssertEqual(usage.longWindow.label, "7d")
+        XCTAssertEqual(usage.longWindow.displayPercent, 98)
+        XCTAssertEqual(usage.source, "chatgpt.com usage API")
+    }
+
+    func testCodexAPIUsageMarksCachedResponseStale() throws {
+        let data = """
+        {"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1782249854},
+        "secondary_window":{"used_percent":50,"limit_window_seconds":604800,"reset_at":1782383540}}}
+        """.data(using: .utf8)!
+
+        let usage = try XCTUnwrap(
+            CodexAPIUsageReader.providerUsage(from: data, now: iso("2026-06-02T12:00:00.000Z"), stale: true)
+        )
+
+        XCTAssertTrue(usage.shortWindow.isStale)
+        XCTAssertTrue(usage.longWindow.isStale)
+    }
+
     func testClaudeAPIUsageResponseParsesQuotaWindows() throws {
         let data = """
         {
