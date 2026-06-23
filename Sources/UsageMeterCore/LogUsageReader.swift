@@ -176,6 +176,12 @@ public struct LogUsageReader {
         return nil
     }
 
+    /// A Codex rate-limit snapshot is only refreshed when Codex makes a
+    /// request, so an idle period leaves the figure frozen. Beyond this age we
+    /// flag the (non-reset) windows as stale so the UI can signal that the
+    /// value may no longer match the live dashboard.
+    private static let codexStaleAfter: TimeInterval = 15 * 60
+
     private func codexUsage(
         from latest: CodexRateLimitEvent,
         source: String,
@@ -195,6 +201,15 @@ public struct LogUsageReader {
             now: now
         )
 
+        // A window that has already rolled over to 0 is accurate (the window
+        // definitely reset), so it is not stale. A window still showing the
+        // snapshot value is stale once the snapshot itself is old enough.
+        let snapshotAge = now.timeIntervalSince(latest.timestamp)
+        let primaryRolled = latest.primaryResetDate.map { $0 <= now } ?? false
+        let secondaryRolled = latest.secondaryResetDate.map { $0 <= now } ?? false
+        let primaryStale = !primaryRolled && snapshotAge > Self.codexStaleAfter
+        let secondaryStale = !secondaryRolled && snapshotAge > Self.codexStaleAfter
+
         return ProviderUsage(
             provider: .codex,
             shortWindow: UsageWindow(
@@ -204,7 +219,8 @@ public struct LogUsageReader {
                 resetDate: primaryWindow.resetDate,
                 isEstimated: false,
                 usedPercent: primaryWindow.usedPercent,
-                unitName: "quota"
+                unitName: "quota",
+                isStale: primaryStale
             ),
             longWindow: UsageWindow(
                 label: windowLabel(minutes: latest.secondaryMinutes),
@@ -213,7 +229,8 @@ public struct LogUsageReader {
                 resetDate: secondaryWindow.resetDate,
                 isEstimated: false,
                 usedPercent: secondaryWindow.usedPercent,
-                unitName: "quota"
+                unitName: "quota",
+                isStale: secondaryStale
             ),
             detail: "Codex rate-limit snapshot\(latest.planType.map { " (\($0))" } ?? "") • log \(relativeAge(of: latest.timestamp, now: now))",
             source: source,

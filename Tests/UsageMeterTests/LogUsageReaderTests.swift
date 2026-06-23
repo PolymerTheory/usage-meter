@@ -81,6 +81,43 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-07T12:00:00Z"))
     }
 
+    func testCodexRateLimitFreshSnapshotIsNotStale() throws {
+        let root = try temporaryLogRoot()
+        let log = root.appendingPathComponent("session.jsonl")
+        let futureShort = Int(isoPlain("2026-06-02T16:00:00Z").timeIntervalSince1970)
+        let futureLong = Int(isoPlain("2026-06-09T12:00:00Z").timeIntervalSince1970)
+        let line = #"{"timestamp":"2026-06-02T11:58:00.000Z","type":"event_msg","payload":{"rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_at":\#(futureShort)},"secondary":{"used_percent":80,"window_minutes":10080,"resets_at":\#(futureLong)},"plan_type":"plus"}}}"#
+        try line.write(to: log, atomically: true, encoding: .utf8)
+
+        // Snapshot is 2 minutes old — well within the freshness window.
+        let usage = try XCTUnwrap(
+            LogUsageReader().readLatestCodexRateLimit(root: root, now: iso("2026-06-02T12:00:00.000Z"))
+        )
+
+        XCTAssertFalse(usage.shortWindow.isStale)
+        XCTAssertFalse(usage.longWindow.isStale)
+    }
+
+    func testCodexRateLimitOldSnapshotMarksUnresetWindowStale() throws {
+        let root = try temporaryLogRoot()
+        let log = root.appendingPathComponent("session.jsonl")
+        let expiredShort = Int(isoPlain("2026-06-02T08:00:00Z").timeIntervalSince1970)
+        let futureLong = Int(isoPlain("2026-06-09T12:00:00Z").timeIntervalSince1970)
+        let line = #"{"timestamp":"2026-06-02T06:00:00.000Z","type":"event_msg","payload":{"rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_at":\#(expiredShort)},"secondary":{"used_percent":80,"window_minutes":10080,"resets_at":\#(futureLong)},"plan_type":"plus"}}}"#
+        try line.write(to: log, atomically: true, encoding: .utf8)
+
+        // Snapshot is 6 hours old: the 5h window has reset (accurate 0%, not
+        // stale), but the 7d window still shows the frozen 80% and is stale.
+        let usage = try XCTUnwrap(
+            LogUsageReader().readLatestCodexRateLimit(root: root, now: iso("2026-06-02T12:00:00.000Z"))
+        )
+
+        XCTAssertEqual(usage.shortWindow.displayPercent, 0)
+        XCTAssertFalse(usage.shortWindow.isStale)
+        XCTAssertEqual(usage.longWindow.displayPercent, 80)
+        XCTAssertTrue(usage.longWindow.isStale)
+    }
+
     func testClaudeAPIUsageResponseParsesQuotaWindows() throws {
         let data = """
         {

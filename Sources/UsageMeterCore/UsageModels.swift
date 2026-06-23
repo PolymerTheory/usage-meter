@@ -13,6 +13,12 @@ public struct UsageWindow: Equatable, Sendable {
     public let isEstimated: Bool
     public let usedPercent: Double?
     public let unitName: String
+    /// True when the underlying snapshot is old enough that the displayed
+    /// figure may no longer match the provider's live dashboard. Exact
+    /// snapshots (e.g. Codex rate limits) are only refreshed while the tool
+    /// is in use, so an idle period leaves the value frozen and increasingly
+    /// approximate.
+    public let isStale: Bool
 
     public init(
         label: String,
@@ -21,7 +27,8 @@ public struct UsageWindow: Equatable, Sendable {
         resetDate: Date?,
         isEstimated: Bool,
         usedPercent: Double? = nil,
-        unitName: String = "tokens"
+        unitName: String = "tokens",
+        isStale: Bool = false
     ) {
         self.label = label
         self.usedUnits = usedUnits
@@ -30,6 +37,7 @@ public struct UsageWindow: Equatable, Sendable {
         self.isEstimated = isEstimated
         self.usedPercent = usedPercent
         self.unitName = unitName
+        self.isStale = isStale
     }
 
     public var fractionUsed: Double {

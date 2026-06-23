@@ -17,10 +17,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// clicking anywhere outside it dismisses it. (.transient behavior is
     /// unreliable for accessory-policy apps that never become the active app.)
     private var outsideClickMonitor: Any?
+    /// Held for the app's lifetime to opt out of App Nap. Without it, macOS
+    /// suspends the refresh timers when the app is idle and unfocused, freezing
+    /// the displayed usage at a stale snapshot until the user interacts again.
+    /// We allow idle system sleep so the Mac can still sleep normally.
+    private var activityToken: NSObjectProtocol?
+    /// Signature of the last icon we drew, so the 1-second activity timer does
+    /// not re-render the menu-bar image when nothing visible has changed.
+    private var lastRenderSignature: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LaunchDiagnostics.write("applicationDidFinishLaunching")
         NSApp.setActivationPolicy(.accessory)
+
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Keep AI usage meter current"
+        )
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureStatusButton(with: .empty)
@@ -48,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
         }
 
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.model.refreshActivity()
             }
@@ -63,18 +76,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         button.target = self
         button.action = #selector(togglePopover)
-        button.image = MeterIconRenderer.image(snapshot: snapshot)
         button.imagePosition = .imageOnly
         button.title = ""
         button.toolTip = "UsageMeter: Codex and Claude quota"
         statusItem.length = 28
+
+        // Only re-render the icon (and log) when the visible state changes.
+        // The 1-second activity timer calls this constantly; rebuilding the
+        // NSImage and writing a log line every tick wastes CPU and floods the
+        // diagnostics log.
+        let signature = Self.renderSignature(for: snapshot)
+        guard signature != lastRenderSignature else { return }
+        lastRenderSignature = signature
+
+        button.image = MeterIconRenderer.image(snapshot: snapshot)
         let activeProviders = snapshot.providers
             .filter(\.isActive)
             .map { $0.provider.rawValue }
             .joined(separator: ",")
         LaunchDiagnostics.write(
-            "configured status button title=\(button.title) frame=\(button.frame) active=\(activeProviders)"
+            "configured status button active=\(activeProviders) signature=\(signature)"
         )
+    }
+
+    /// Compact description of everything the menu-bar icon depends on:
+    /// each window's integer percent (or "x" when unavailable) and the
+    /// per-provider active flag.
+    private static func renderSignature(for snapshot: UsageSnapshot) -> String {
+        snapshot.providers.map { provider in
+            func part(_ window: UsageWindow) -> String {
+                window.unitName == "unavailable" ? "x" : String(Int(window.fractionUsed * 100))
+            }
+            return "\(provider.provider.rawValue):\(part(provider.shortWindow)):\(part(provider.longWindow)):\(provider.isActive)"
+        }.joined(separator: "|")
     }
 
     @objc private func togglePopover() {
@@ -193,13 +227,25 @@ enum UsageMeterMain {
         print("claude project logs: \(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/projects").path) ? "present" : "missing")")
         print("claude hooks for this executable: \(ClaudeHookInstaller.isInstalled(executablePath: executablePath, home: home) ? "installed" : "missing")")
 
-        let snapshot = UsageMonitor(home: home).snapshot()
+        let now = Date()
+        let snapshot = UsageMonitor(home: home).snapshot(now: now)
         for provider in snapshot.providers {
             let availability = provider.isUnavailable ? "unavailable" : "available"
             print("\(provider.provider.rawValue.lowercased()) usage: \(availability)")
             print("  source: \(provider.source)")
             print("  detail: \(provider.detail)")
+            print("  active: \(provider.isActive)")
+            printWindow("short", provider.shortWindow, now: now)
+            printWindow("long", provider.longWindow, now: now)
         }
+    }
+
+    private static func printWindow(_ label: String, _ window: UsageWindow, now: Date) {
+        let pct = window.usedPercent.map { String(format: "%.1f%%", $0) } ?? "n/a"
+        let reset = window.resetDate.map {
+            String(format: "%+.0f min", $0.timeIntervalSince(now) / 60)
+        } ?? "none"
+        print("  \(label) [\(window.label)]: \(pct) (unit=\(window.unitName), stale=\(window.isStale), reset=\(reset))")
     }
 }
 
@@ -418,8 +464,11 @@ struct WindowRow: View {
         if window.unitName == "unavailable" {
             return "n/a"
         }
+        // "~" marks a value carried over from an old snapshot — it may no
+        // longer match the provider's live dashboard.
+        let prefix = window.isStale ? "~" : ""
         let suffix = window.isEstimated ? " est" : ""
-        return "\(formatPercent(window.displayPercent))%\(suffix)"
+        return "\(prefix)\(formatPercent(window.displayPercent))%\(suffix)"
     }
 
     private var unitLabel: String {
