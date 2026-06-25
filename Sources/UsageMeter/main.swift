@@ -365,11 +365,16 @@ struct UsagePopoverView: View {
     @ObservedObject var model: UsageViewModel
     let checkForUpdates: () -> Void
 
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            HStack(spacing: 6) {
                 Text("AI Usage")
                     .font(.headline)
+                Text("v\(Self.appVersion)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: checkForUpdates) {
                     Image(systemName: "arrow.down.circle")
