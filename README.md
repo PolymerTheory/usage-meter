@@ -93,7 +93,16 @@ merges its lifecycle hooks into `~/.claude/settings.json`; it does not replace
 other Claude settings or hooks. Existing Claude Code sessions may need to be
 restarted once after enabling the integration.
 
-To have it launch at login, add it to **System Settings → General → Login Items**.
+UsageMeter installs a per-user LaunchAgent (`io.github.PolymerTheory.UsageMeter`)
+on first launch, so it starts automatically at login and is relaunched within
+seconds if it ever exits unexpectedly — no need to add it to Login Items
+manually. This is set up regardless of how the app arrived (install script,
+manual download, or in-app update). To stop and remove it:
+
+```sh
+launchctl bootout "gui/$(id -u)/io.github.PolymerTheory.UsageMeter"
+rm ~/Library/LaunchAgents/io.github.PolymerTheory.UsageMeter.plist
+```
 
 UsageMeter checks for updates daily. Use the down-arrow button in the popover
 to check immediately. Sparkle verifies every downloaded update with the
@@ -119,10 +128,13 @@ These values only affect the estimated token-log mode. The live ChatGPT and Anth
 ## Uninstall
 
 ```sh
-pkill -x UsageMeter          # quit the app
+# Stop and remove the auto-restart LaunchAgent first, otherwise it relaunches.
+launchctl bootout "gui/$(id -u)/io.github.PolymerTheory.UsageMeter" 2>/dev/null
+rm -f ~/Library/LaunchAgents/io.github.PolymerTheory.UsageMeter.plist
+pkill -x UsageMeter
 rm -rf ~/Applications/UsageMeter.app
-rm -f ~/Library/Caches/UsageMeter/claude-usage.json    # cached Claude data
-rm -f ~/Library/Caches/UsageMeter/claude-rate-limit.json
+rm -rf ~/Library/Caches/UsageMeter            # cached usage data
+rm -f ~/Library/Application\ Support/UsageMeter/instance.lock
 ```
 
 ## Known limitations

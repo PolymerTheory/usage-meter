@@ -15,9 +15,22 @@ TARGET_APP="$INSTALL_DIR/$APP_NAME.app"
 "$ROOT_DIR/script/package_app.sh" "$@"
 
 mkdir -p "$INSTALL_DIR"
+
+# Unload the LaunchAgent BEFORE replacing the bundle. Otherwise the agent's
+# KeepAlive would relaunch the app the instant pkill stops it, and that
+# relaunch racing the copy below corrupts the freshly-copied bundle.
+LAUNCH_AGENT_LABEL="io.github.PolymerTheory.UsageMeter"
+launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" 2>/dev/null || true
+
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
   pkill -x "$APP_NAME"
 fi
+# Wait for the process to actually go away before copying.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -x "$APP_NAME" >/dev/null 2>&1 || break
+  sleep 0.3
+done
+
 if [[ -d "$TARGET_APP" ]]; then
   rm -rf "$TARGET_APP"
 fi

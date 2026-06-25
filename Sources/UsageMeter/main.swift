@@ -179,6 +179,16 @@ enum UsageMeterMain {
         if handleCommandLineMode() {
             return
         }
+        // If we weren't launched by our own LaunchAgent (e.g. first run after a
+        // manual download or a Sparkle update relaunch), make sure the agent is
+        // installed and let launchd own the process, then exit. launchd will
+        // start the managed instance, which keeps the app alive across crashes
+        // and logins on any machine — not just where the install script ran.
+        if !LaunchAgentInstaller.isManagedInstance(),
+           let executablePath = Bundle.main.executablePath {
+            LaunchAgentInstaller.ensureRunning(executablePath: executablePath)
+            return
+        }
         if !acquireSingleInstanceLock() {
             return
         }
