@@ -179,6 +179,9 @@ enum UsageMeterMain {
         if handleCommandLineMode() {
             return
         }
+        if !acquireSingleInstanceLock() {
+            return
+        }
         let app = NSApplication.shared
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
@@ -206,12 +209,48 @@ enum UsageMeterMain {
             return true
         }
 
+        if arguments == ["--install-launch-agent"], let executablePath = Bundle.main.executablePath {
+            do {
+                try LaunchAgentInstaller.install(executablePath: executablePath)
+                print("LaunchAgent installed; UsageMeter will run at login and auto-restart")
+            } catch {
+                fputs("Failed to install LaunchAgent: \(error)\n", stderr)
+            }
+            return true
+        }
+
         if arguments == ["--diagnose"] {
             printDiagnostics()
             return true
         }
 
         return false
+    }
+
+    /// Held for the GUI process's lifetime once acquired, keeping the
+    /// single-instance lock file descriptor open.
+    private static var instanceLockDescriptor: Int32 = -1
+
+    /// Acquire an exclusive lock so only one menu-bar instance runs at a time
+    /// (e.g. launchd plus a leftover Login Item, or a Sparkle relaunch racing
+    /// launchd). Uses an advisory file lock rather than NSRunningApplication so
+    /// the short-lived `--activity-hook` / `--install-*` CLI processes — which
+    /// share this bundle id — never count as "another instance".
+    /// Returns true if this process already holds (or just acquired) the lock.
+    private static func acquireSingleInstanceLock() -> Bool {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/UsageMeter")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let lockPath = dir.appendingPathComponent("instance.lock").path
+
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else { return true }  // can't lock → don't block startup
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            close(fd)
+            return false  // another instance holds the lock
+        }
+        instanceLockDescriptor = fd  // keep open for the process lifetime
+        return true
     }
 
     private static func printDiagnostics() {
@@ -226,6 +265,7 @@ enum UsageMeterMain {
         print("codex sessions: \(FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex/sessions").path) ? "present" : "missing")")
         print("claude project logs: \(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/projects").path) ? "present" : "missing")")
         print("claude hooks for this executable: \(ClaudeHookInstaller.isInstalled(executablePath: executablePath, home: home) ? "installed" : "missing")")
+        print("launch agent: \(LaunchAgentInstaller.isInstalled(home: home) ? "installed" : "missing")")
 
         let now = Date()
         let snapshot = UsageMonitor(home: home).snapshot(now: now)

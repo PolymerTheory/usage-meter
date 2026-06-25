@@ -24,6 +24,9 @@ fi
 cp -R "$SOURCE_APP" "$TARGET_APP"
 
 "$TARGET_APP/Contents/MacOS/$APP_NAME" --install-claude-hooks
-/usr/bin/open -n "$TARGET_APP"
+# Install/refresh the LaunchAgent. This both starts the app now (via launchctl
+# bootstrap/kickstart) and keeps it running: it relaunches at login and within
+# seconds if it ever exits unexpectedly.
+"$TARGET_APP/Contents/MacOS/$APP_NAME" --install-launch-agent
 
-echo "Installed and launched: $TARGET_APP"
+echo "Installed and launched via LaunchAgent: $TARGET_APP"
