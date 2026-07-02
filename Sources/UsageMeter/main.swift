@@ -184,8 +184,11 @@ enum UsageMeterMain {
         // installed and let launchd own the process, then exit. launchd will
         // start the managed instance, which keeps the app alive across crashes
         // and logins on any machine — not just where the install script ran.
+        // Only do this for a real installed bundle so a dev build run from a
+        // checkout/dist directory doesn't hijack the managed LaunchAgent.
         if !LaunchAgentInstaller.isManagedInstance(),
-           let executablePath = Bundle.main.executablePath {
+           let executablePath = Bundle.main.executablePath,
+           LaunchAgentInstaller.isInstalledLocation(executablePath) {
             LaunchAgentInstaller.ensureRunning(executablePath: executablePath)
             return
         }

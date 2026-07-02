@@ -30,6 +30,15 @@ public enum LaunchAgentInstaller {
         ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == label
     }
 
+    /// True only for a real installed app bundle (…/Applications/…), so a dev
+    /// build run from a checkout/dist directory can't hijack the managed
+    /// LaunchAgent by pointing it at the dev binary.
+    public static func isInstalledLocation(_ executablePath: String) -> Bool {
+        executablePath.contains("/Applications/\(appBundleName)/")
+    }
+
+    private static let appBundleName = "UsageMeter.app"
+
     /// Full (re)install used by the `--install-launch-agent` command and the
     /// install script: write the plist and force a clean reload + restart.
     public static func install(

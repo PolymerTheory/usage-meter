@@ -46,6 +46,10 @@ public struct ClaudeAPIUsageReader {
     private static let scopes = "user:profile user:inference user:sessions:claude_code"
     private static let keychainService = "Claude Code-credentials"
     private static let refreshBuffer: TimeInterval = 5 * 60
+    /// Minimum spacing between live usage-endpoint calls. Within this window a
+    /// recent cached response is served as current, so rapid popover opens (and
+    /// other frequent snapshot calls) can't burst-hit the API and earn a 429.
+    private static let minLiveInterval: TimeInterval = 60
 
     public init(
         session: URLSession = .shared,
@@ -56,6 +60,12 @@ public struct ClaudeAPIUsageReader {
     }
 
     public func readUsage(home: URL, now: Date = Date()) -> ReadResult {
+        // Serve a very recent cached response as current instead of calling the
+        // live API again, so bursts of snapshot() calls don't hammer the endpoint.
+        if let fresh = freshCachedUsage(home: home, now: now, maxAge: Self.minLiveInterval) {
+            return fresh
+        }
+
         guard var credentials = loadCredentials(home: home, now: now) else {
             let reason: FailureReason = hasClaudeDesktopTokenCache(home: home)
                 ? .desktopTokenCacheOnly
@@ -85,8 +95,8 @@ public struct ClaudeAPIUsageReader {
                     }
                     writeCache(data: data, home: home)
                     return .success(usage)
-                case .rateLimited:
-                    recordRateLimit(home: home, now: now)
+                case let .rateLimited(retryAfter):
+                    recordRateLimit(home: home, now: now, retryAfter: retryAfter)
                     return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                         ?? .failure(.rateLimited)
                 case let .failure(message):
@@ -108,8 +118,8 @@ public struct ClaudeAPIUsageReader {
             }
             writeCache(data: data, home: home)
             return .success(usage)
-        case .rateLimited:
-            recordRateLimit(home: home, now: now)
+        case let .rateLimited(retryAfter):
+            recordRateLimit(home: home, now: now, retryAfter: retryAfter)
             return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                 ?? .failure(.rateLimited)
         case let .failure(message):
@@ -234,8 +244,8 @@ public struct ClaudeAPIUsageReader {
             }
             writeCache(data: data, home: home)
             return .success(usage)
-        case .rateLimited:
-            recordRateLimit(home: home, now: now)
+        case let .rateLimited(retryAfter):
+            recordRateLimit(home: home, now: now, retryAfter: retryAfter)
             return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                 ?? .failure(.rateLimited)
         case let .failure(message):
@@ -260,8 +270,8 @@ public struct ClaudeAPIUsageReader {
         ])
 
         let response = fetch(request: request)
-        if case .rateLimited = response {
-            recordRateLimit(home: home, now: now)
+        if case let .rateLimited(retryAfter) = response {
+            recordRateLimit(home: home, now: now, retryAfter: retryAfter)
         }
         guard case let .success(data) = response,
               let refresh = try? JSONDecoder().decode(TokenRefreshResponse.self, from: data),
@@ -348,7 +358,8 @@ public struct ClaudeAPIUsageReader {
                 return
             }
             if httpResponse.statusCode == 429 {
-                result = .rateLimited
+                let header = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                result = .rateLimited(retryAfter: header.flatMap(TimeInterval.init))
                 return
             }
             guard (200..<300).contains(httpResponse.statusCode), let data, !data.isEmpty else {
@@ -366,6 +377,21 @@ public struct ClaudeAPIUsageReader {
             task.cancel()
         }
         return result
+    }
+
+    /// Returns the cached response as a current (non-stale) reading when it is
+    /// younger than `maxAge`, otherwise nil so the caller performs a live fetch.
+    private func freshCachedUsage(home: URL, now: Date, maxAge: TimeInterval) -> ReadResult? {
+        let url = cacheURL(home: home)
+        guard let data = try? Data(contentsOf: url),
+              let updated = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+              now.timeIntervalSince(updated) >= 0,
+              now.timeIntervalSince(updated) < maxAge,
+              let response = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
+              let usage = Self.providerUsage(from: response, lastUpdated: updated, now: now) else {
+            return nil
+        }
+        return .success(usage)
     }
 
     private func cachedUsage(home: URL, now: Date, fallbackReason: FailureReason?) -> ReadResult? {
@@ -431,15 +457,19 @@ public struct ClaudeAPIUsageReader {
         return date > now ? date : nil
     }
 
-    private func recordRateLimit(home: URL, now: Date) {
+    private func recordRateLimit(home: URL, now: Date, retryAfter: TimeInterval?) {
         let url = rateLimitURL(home: home)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        // Back off for one refresh cycle (5 min) rather than a full hour so
-        // that a transient 429 doesn't suppress updates for an extended period.
-        let payload = ["until": now.addingTimeInterval(5 * 60).timeIntervalSince1970]
+        // Honor the server's Retry-After when present: polling again before it
+        // expires just earns another 429 and can extend the ban. Without a
+        // header, back off one refresh cycle. Clamp to a sane range and add a
+        // small buffer so we don't retry a hair too early.
+        let base = retryAfter ?? (5 * 60)
+        let backoff = min(max(base, 5 * 60), 2 * 60 * 60) + 15
+        let payload = ["until": now.addingTimeInterval(backoff).timeIntervalSince1970]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: url, options: [.atomic])
         }
@@ -526,7 +556,9 @@ private enum CredentialSource: Sendable {
 
 private enum FetchResult: Equatable, Sendable {
     case success(Data)
-    case rateLimited
+    /// 429 from the server; `retryAfter` is the server-requested cooldown in
+    /// seconds when a `Retry-After` header was present.
+    case rateLimited(retryAfter: TimeInterval?)
     case failure(String)
 }
 
