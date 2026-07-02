@@ -231,6 +231,34 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-08T18:00:00Z"))
     }
 
+    func testClaudeAPIUsageCanMarkCachedResponseStale() throws {
+        let data = """
+        {
+          "five_hour": {
+            "utilization": 42.5,
+            "resets_at": "2026-06-02T17:00:00Z"
+          },
+          "seven_day": {
+            "utilization": 11,
+            "resets_at": "2026-06-08T17:00:00Z"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ClaudeUsageResponse.self, from: data)
+        let usage = try XCTUnwrap(
+            ClaudeAPIUsageReader.providerUsage(
+                from: response,
+                lastUpdated: iso("2026-06-02T12:00:00.000Z"),
+                now: iso("2026-06-02T12:00:00.000Z"),
+                stale: true
+            )
+        )
+
+        XCTAssertTrue(usage.shortWindow.isStale)
+        XCTAssertTrue(usage.longWindow.isStale)
+    }
+
     func testClaudeAPIUsageMergesPerModelWindowEvenWhenBaseSevenDayPresent() throws {
         // Real Anthropic responses include the aggregate `seven_day` window AND
         // per-model windows at the same time. The binding limit (here Opus at

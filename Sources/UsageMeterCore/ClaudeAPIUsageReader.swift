@@ -3,6 +3,7 @@ import Foundation
 public struct ClaudeAPIUsageReader {
     public enum FailureReason: Equatable, Sendable {
         case missingCredentials
+        case desktopTokenCacheOnly
         case rateLimited
         case requestFailed(String)
         case decodeFailed
@@ -11,6 +12,8 @@ public struct ClaudeAPIUsageReader {
             switch self {
             case .missingCredentials:
                 return "Claude OAuth credentials unavailable"
+            case .desktopTokenCacheOnly:
+                return "Claude desktop token cache found, but Claude Code CLI OAuth credentials are unavailable"
             case .rateLimited:
                 return "Claude OAuth usage API rate limited"
             case let .requestFailed(message):
@@ -54,8 +57,11 @@ public struct ClaudeAPIUsageReader {
 
     public func readUsage(home: URL, now: Date = Date()) -> ReadResult {
         guard var credentials = loadCredentials(home: home) else {
-            return cachedUsage(home: home, now: now, fallbackReason: .missingCredentials)
-                ?? .failure(.missingCredentials)
+            let reason: FailureReason = hasClaudeDesktopTokenCache(home: home)
+                ? .desktopTokenCacheOnly
+                : .missingCredentials
+            return cachedUsage(home: home, now: now, fallbackReason: reason)
+                ?? .failure(reason)
         }
 
         if let rateLimit = activeRateLimit(home: home, now: now) {
@@ -64,11 +70,33 @@ public struct ClaudeAPIUsageReader {
         }
 
         if credentials.needsRefresh(now: now, refreshBuffer: Self.refreshBuffer) {
-            guard let refreshed = refreshCredentials(credentials, home: home, now: now) else {
-                return cachedUsage(home: home, now: now, fallbackReason: .requestFailed("token refresh unavailable"))
-                    ?? .failure(.requestFailed("token refresh unavailable"))
+            if let refreshed = refreshCredentials(credentials, home: home, now: now) {
+                credentials = refreshed
+            } else {
+                // Claude Code can leave an access token usable even when the
+                // refresh path we know about is unavailable. Try the token
+                // before falling back to stale cached quota.
+                let fallbackResponse = fetchUsage(credentials: credentials)
+                switch fallbackResponse {
+                case let .success(data):
+                    guard let decoded = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
+                          let usage = Self.providerUsage(from: decoded, lastUpdated: now, now: now) else {
+                        return .failure(.decodeFailed)
+                    }
+                    writeCache(data: data, home: home)
+                    return .success(usage)
+                case .rateLimited:
+                    recordRateLimit(home: home, now: now)
+                    return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
+                        ?? .failure(.rateLimited)
+                case let .failure(message):
+                    let detail = hasClaudeDesktopTokenCache(home: home)
+                        ? "legacy OAuth token is expired and Claude's modern desktop token cache is unsupported; access token fetch failed: \(message)"
+                        : "token refresh unavailable; access token fetch failed: \(message)"
+                    return cachedUsage(home: home, now: now, fallbackReason: .requestFailed(detail))
+                        ?? .failure(.requestFailed(detail))
+                }
             }
-            credentials = refreshed
         }
 
         let response = fetchUsage(credentials: credentials)
@@ -97,7 +125,8 @@ public struct ClaudeAPIUsageReader {
     public static func providerUsage(
         from response: ClaudeUsageResponse,
         lastUpdated: Date,
-        now: Date? = nil
+        now: Date? = nil,
+        stale: Bool = false
     ) -> ProviderUsage? {
         let short = response.mergedWindow(for: "five_hour")
         let long = response.mergedWindow(for: "seven_day")
@@ -110,13 +139,15 @@ public struct ClaudeAPIUsageReader {
             label: "5h",
             data: short,
             fallbackPercent: long?.utilization ?? 0,
-            now: now
+            now: now,
+            stale: stale
         )
         let longWindow = usageWindow(
             label: "7d",
             data: long,
             fallbackPercent: short?.utilization ?? 0,
-            now: now
+            now: now,
+            stale: stale
         )
 
         return ProviderUsage(
@@ -326,7 +357,7 @@ public struct ClaudeAPIUsageReader {
         guard let data = try? Data(contentsOf: url),
               let response = try? JSONDecoder().decode(ClaudeUsageResponse.self, from: data),
               let updated = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-              let usage = Self.providerUsage(from: response, lastUpdated: updated, now: now) else {
+              let usage = Self.providerUsage(from: response, lastUpdated: updated, now: now, stale: true) else {
             return nil
         }
 
@@ -362,6 +393,15 @@ public struct ClaudeAPIUsageReader {
 
     private func rateLimitURL(home: URL) -> URL {
         home.appendingPathComponent("Library/Caches/UsageMeter/claude-rate-limit.json")
+    }
+
+    private func hasClaudeDesktopTokenCache(home: URL) -> Bool {
+        let url = home.appendingPathComponent("Library/Application Support/Claude/config.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return json["oauth:tokenCacheV2"] != nil || json["oauth:tokenCache"] != nil
     }
 
     private func activeRateLimit(home: URL, now: Date) -> Date? {
@@ -427,7 +467,8 @@ public struct ClaudeAPIUsageReader {
         label: String,
         data: ClaudeUsageWindow?,
         fallbackPercent: Double,
-        now: Date?
+        now: Date?,
+        stale: Bool
     ) -> UsageWindow {
         let resetDate = data?.resetDate
         let isStale = now.map { current in resetDate.map { $0 <= current } ?? false } ?? false
@@ -439,7 +480,8 @@ public struct ClaudeAPIUsageReader {
             resetDate: isStale ? nil : resetDate,
             isEstimated: false,
             usedPercent: percent,
-            unitName: "quota"
+            unitName: "quota",
+            isStale: stale
         )
     }
 }
