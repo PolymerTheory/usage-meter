@@ -56,7 +56,7 @@ public struct ClaudeAPIUsageReader {
     }
 
     public func readUsage(home: URL, now: Date = Date()) -> ReadResult {
-        guard var credentials = loadCredentials(home: home) else {
+        guard var credentials = loadCredentials(home: home, now: now) else {
             let reason: FailureReason = hasClaudeDesktopTokenCache(home: home)
                 ? .desktopTokenCacheOnly
                 : .missingCredentials
@@ -160,8 +160,20 @@ public struct ClaudeAPIUsageReader {
         )
     }
 
-    private func loadCredentials(home: URL) -> ClaudeCredentials? {
-        loadCredentialsFromFile(home: home) ?? loadCredentialsFromKeychain()
+    private func loadCredentials(home: URL, now: Date) -> ClaudeCredentials? {
+        loadCredentialsFromUsageMeterKeychain(now: now)
+            ?? loadCredentialsFromFile(home: home)
+            ?? loadCredentialsFromKeychain()
+    }
+
+    private func loadCredentialsFromUsageMeterKeychain(now: Date) -> ClaudeCredentials? {
+        guard let data = ClaudeHookCredentialCapture.load(),
+              let credentials = Self.credentials(from: data, source: .usageMeterKeychain),
+              let expiresAt = credentials.expiresAt,
+              expiresAt > now else {
+            return nil
+        }
+        return credentials
     }
 
     private func loadCredentialsFromFile(home: URL) -> ClaudeCredentials? {
@@ -286,17 +298,21 @@ public struct ClaudeAPIUsageReader {
         data["claudeAiOauth"] = oauth
 
         switch credentials.source {
+        case .usageMeterKeychain:
+            if let encoded = try? JSONSerialization.data(withJSONObject: data) {
+                ClaudeHookCredentialCapture.save(data: encoded)
+            }
         case .file:
             let url = home.appendingPathComponent(".claude/.credentials.json")
             if let encoded = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]) {
                 try? encoded.write(to: url, options: [.atomic])
             }
         case .keychain:
-            saveCredentialsToKeychain(data)
+            saveCredentialsToKeychain(data, service: Self.keychainService)
         }
     }
 
-    private func saveCredentialsToKeychain(_ data: [String: Any]) {
+    private func saveCredentialsToKeychain(_ data: [String: Any], service: String) {
         guard let encoded = try? JSONSerialization.data(withJSONObject: data),
               let password = String(data: encoded, encoding: .utf8) else {
             return
@@ -306,7 +322,7 @@ public struct ClaudeAPIUsageReader {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = [
             "add-generic-password",
-            "-s", Self.keychainService,
+            "-s", service,
             "-a", NSUserName(),
             "-w", password,
             "-U"
@@ -503,6 +519,7 @@ private struct ClaudeCredentials {
 }
 
 private enum CredentialSource: Sendable {
+    case usageMeterKeychain
     case file
     case keychain
 }

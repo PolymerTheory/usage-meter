@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public final class ClaudeActivityReader: @unchecked Sendable {
     public static let relativeStatusPath = "Library/Application Support/UsageMeter/activity/claude.json"
@@ -57,6 +58,141 @@ public enum ActivityStatusWriter {
         )
         let data = try JSONEncoder().encode(status)
         try data.write(to: url, options: .atomic)
+
+        if provider == .claude {
+            ClaudeHookCredentialCapture.captureFromEnvironment(home: home, now: now)
+        }
+    }
+}
+
+public enum ClaudeHookCredentialCapture {
+    public static let keychainService = "UsageMeter-Claude-OAuth"
+    private static let tokenLifetime: TimeInterval = 55 * 60
+
+    public static func captureFromEnvironment(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        now: Date = Date()
+    ) {
+        guard let data = credentialPayload(from: environment, now: now) else {
+            return
+        }
+        save(data: data)
+    }
+
+    static func credentialPayload(from environment: [String: String], now: Date) -> Data? {
+        guard let accessToken = oauthToken(from: environment), !accessToken.isEmpty else {
+            return nil
+        }
+        var oauth: [String: Any] = [
+            "accessToken": accessToken,
+            "expiresAt": expirationDate(for: accessToken, capturedAt: now).timeIntervalSince1970 * 1000,
+            "capturedAt": now.timeIntervalSince1970 * 1000,
+            "source": "claude-hook"
+        ]
+        if let refreshToken = nonEmpty(environment["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"]) {
+            oauth["refreshToken"] = refreshToken
+        }
+        if let subscriptionType = nonEmpty(environment["CLAUDE_CODE_SUBSCRIPTION_TYPE"]) {
+            oauth["subscriptionType"] = subscriptionType
+        }
+        if let scopes = nonEmpty(environment["CLAUDE_CODE_OAUTH_SCOPES"]) {
+            oauth["scopes"] = scopes
+        }
+        if let clientID = nonEmpty(environment["CLAUDE_CODE_OAUTH_CLIENT_ID"]) {
+            oauth["clientId"] = clientID
+        }
+
+        let payload: [String: Any] = ["claudeAiOauth": oauth]
+        return try? JSONSerialization.data(withJSONObject: payload)
+    }
+
+    static func load(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Data? {
+        load()
+    }
+
+    private static func oauthToken(from environment: [String: String]) -> String? {
+        if let token = nonEmpty(environment["CLAUDE_CODE_OAUTH_TOKEN"]) {
+            return token
+        }
+        if let descriptor = nonEmpty(environment["CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"]),
+           let fd = Int32(descriptor) {
+            return tokenFromFileDescriptor(fd)
+        }
+        return nil
+    }
+
+    private static func tokenFromFileDescriptor(_ fd: Int32) -> String? {
+        let url = URL(fileURLWithPath: "/dev/fd/\(fd)")
+        guard let data = try? Data(contentsOf: url),
+              let token = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return nonEmpty(token)
+    }
+
+    private static func expirationDate(for token: String, capturedAt: Date) -> Date {
+        jwtExpirationDate(for: token) ?? capturedAt.addingTimeInterval(tokenLifetime)
+    }
+
+    private static func jwtExpirationDate(for token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else {
+            return nil
+        }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while payload.count % 4 != 0 {
+            payload.append("=")
+        }
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let exp = json["exp"] as? Double {
+            return Date(timeIntervalSince1970: exp)
+        }
+        if let exp = json["exp"] as? Int {
+            return Date(timeIntervalSince1970: Double(exp))
+        }
+        return nil
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func save(data: Data) {
+        let query = baseQuery()
+        SecItemDelete(query as CFDictionary)
+
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    private static func load() -> Data? {
+        var query = baseQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            return nil
+        }
+        return result as? Data
+    }
+
+    private static func baseQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: NSUserName()
+        ]
     }
 }
 

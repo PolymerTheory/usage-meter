@@ -437,6 +437,30 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 202)), false)
     }
 
+    func testClaudeHookCredentialCaptureBuildsPayloadFromEnvironment() throws {
+        let data = try XCTUnwrap(
+            ClaudeHookCredentialCapture.credentialPayload(
+                from: [
+                    "CLAUDE_CODE_OAUTH_TOKEN": "hook-access-token",
+                    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "hook-refresh-token",
+                    "CLAUDE_CODE_SUBSCRIPTION_TYPE": "pro",
+                    "CLAUDE_CODE_OAUTH_SCOPES": "user:profile user:inference"
+                ],
+                now: Date(timeIntervalSince1970: 100)
+            )
+        )
+
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let oauth = try XCTUnwrap(root["claudeAiOauth"] as? [String: Any])
+
+        XCTAssertEqual(oauth["accessToken"] as? String, "hook-access-token")
+        XCTAssertEqual(oauth["refreshToken"] as? String, "hook-refresh-token")
+        XCTAssertEqual(oauth["subscriptionType"] as? String, "pro")
+        XCTAssertEqual(oauth["scopes"] as? String, "user:profile user:inference")
+        XCTAssertEqual(oauth["source"] as? String, "claude-hook")
+        XCTAssertNotNil(oauth["expiresAt"])
+    }
+
     func testClaudeHookInstallerPreservesExistingSettingsAndHooks() throws {
         let home = try temporaryLogRoot()
         let settingsURL = home.appendingPathComponent(".claude/settings.json")
