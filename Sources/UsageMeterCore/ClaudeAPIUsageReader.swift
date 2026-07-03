@@ -4,6 +4,7 @@ public struct ClaudeAPIUsageReader {
     public enum FailureReason: Equatable, Sendable {
         case missingCredentials
         case desktopTokenCacheOnly
+        case credentialsExpired
         case rateLimited
         case requestFailed(String)
         case decodeFailed
@@ -14,6 +15,8 @@ public struct ClaudeAPIUsageReader {
                 return "Claude OAuth credentials unavailable"
             case .desktopTokenCacheOnly:
                 return "Claude desktop token cache found, but Claude Code CLI OAuth credentials are unavailable"
+            case .credentialsExpired:
+                return "Claude Code sign-in expired — run 'claude login' to refresh"
             case .rateLimited:
                 return "Claude OAuth usage API rate limited"
             case let .requestFailed(message):
@@ -80,12 +83,17 @@ public struct ClaudeAPIUsageReader {
         }
 
         if credentials.needsRefresh(now: now, refreshBuffer: Self.refreshBuffer) {
-            if let refreshed = refreshCredentials(credentials, home: home, now: now) {
-                credentials = refreshed
-            } else {
-                // Claude Code can leave an access token usable even when the
-                // refresh path we know about is unavailable. Try the token
-                // before falling back to stale cached quota.
+            switch refreshCredentials(credentials, home: home, now: now) {
+            case let .refreshed(creds):
+                credentials = creds
+            case .expired:
+                // The refresh token is dead — no amount of retrying helps until
+                // the user signs in to Claude Code again. Surface the actionable
+                // message rather than stale numbers that look like real quota.
+                return .failure(.credentialsExpired)
+            case .failed:
+                // Transient refresh failure. Claude Code can leave an access
+                // token usable anyway, so try it before falling back to cache.
                 let fallbackResponse = fetchUsage(credentials: credentials)
                 switch fallbackResponse {
                 case let .success(data):
@@ -123,9 +131,15 @@ public struct ClaudeAPIUsageReader {
             return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                 ?? .failure(.rateLimited)
         case let .failure(message):
-            if message == "HTTP 401" || message == "HTTP 403",
-               let refreshed = refreshCredentials(credentials, home: home, now: now) {
-                return fetchUsageAfterRefresh(refreshed, home: home, now: now)
+            if message == "HTTP 401" || message == "HTTP 403" {
+                switch refreshCredentials(credentials, home: home, now: now) {
+                case let .refreshed(creds):
+                    return fetchUsageAfterRefresh(creds, home: home, now: now)
+                case .expired:
+                    return .failure(.credentialsExpired)
+                case .failed:
+                    break
+                }
             }
             return cachedUsage(home: home, now: now, fallbackReason: .requestFailed(message))
                 ?? .failure(.requestFailed(message))
@@ -254,9 +268,19 @@ public struct ClaudeAPIUsageReader {
         }
     }
 
-    private func refreshCredentials(_ credentials: ClaudeCredentials, home: URL, now: Date) -> ClaudeCredentials? {
+    private enum RefreshOutcome {
+        case refreshed(ClaudeCredentials)
+        /// The refresh token itself was rejected — the user must sign in again.
+        case expired
+        /// Transient failure (network / rate limit / 5xx) — worth retrying later.
+        case failed
+    }
+
+    private func refreshCredentials(_ credentials: ClaudeCredentials, home: URL, now: Date) -> RefreshOutcome {
         guard let refreshToken = credentials.refreshToken, !refreshToken.isEmpty else {
-            return nil
+            // No refresh token to work with: the sign-in can only be renewed
+            // by re-authenticating Claude Code.
+            return .expired
         }
 
         var request = URLRequest(url: Self.refreshURL, timeoutInterval: timeout)
@@ -269,27 +293,34 @@ public struct ClaudeAPIUsageReader {
             "scope": Self.scopes
         ])
 
-        let response = fetch(request: request)
-        if case let .rateLimited(retryAfter) = response {
+        switch fetch(request: request) {
+        case let .rateLimited(retryAfter):
             recordRateLimit(home: home, now: now, retryAfter: retryAfter)
+            return .failed
+        case let .failure(message):
+            // A 4xx from the token endpoint means the refresh token is rejected
+            // (e.g. "invalid_grant: Refresh token expired"); re-login required.
+            if message == "HTTP 400" || message == "HTTP 401" || message == "HTTP 403" {
+                return .expired
+            }
+            return .failed
+        case let .success(data):
+            guard let refresh = try? JSONDecoder().decode(TokenRefreshResponse.self, from: data),
+                  let accessToken = refresh.accessToken,
+                  !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .failed
+            }
+            var updated = credentials
+            updated.accessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let refreshToken = refresh.refreshToken, !refreshToken.isEmpty {
+                updated.refreshToken = refreshToken
+            }
+            if let expiresIn = refresh.expiresIn {
+                updated.expiresAt = now.addingTimeInterval(TimeInterval(expiresIn))
+            }
+            saveCredentials(updated, home: home)
+            return .refreshed(updated)
         }
-        guard case let .success(data) = response,
-              let refresh = try? JSONDecoder().decode(TokenRefreshResponse.self, from: data),
-              let accessToken = refresh.accessToken,
-              !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-
-        var updated = credentials
-        updated.accessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let refreshToken = refresh.refreshToken, !refreshToken.isEmpty {
-            updated.refreshToken = refreshToken
-        }
-        if let expiresIn = refresh.expiresIn {
-            updated.expiresAt = now.addingTimeInterval(TimeInterval(expiresIn))
-        }
-        saveCredentials(updated, home: home)
-        return updated
     }
 
     private func saveCredentials(_ credentials: ClaudeCredentials, home: URL) {
