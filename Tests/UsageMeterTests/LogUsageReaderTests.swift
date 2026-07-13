@@ -340,6 +340,66 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-09T10:00:00Z"))
     }
 
+    func testSharedUsageRoundTripsThroughJSON() throws {
+        let blob = SharedUsage(
+            updatedAt: iso("2026-06-02T12:00:00.000Z"),
+            updatedBy: "WorkLaptop",
+            providers: [
+                "codex": SharedProvider(
+                    updatedAt: iso("2026-06-02T11:59:00.000Z"),
+                    updatedBy: "WorkLaptop",
+                    short: SharedWindow(label: "5h", percent: nil, resetAt: nil),
+                    long: SharedWindow(label: "7d", percent: 18, resetAt: iso("2026-06-09T12:00:00.000Z")),
+                    detail: "Codex live usage (plus)",
+                    source: "chatgpt.com usage API"
+                )
+            ]
+        )
+
+        let data = try SyncClient.encoder.encode(blob)
+        let decoded = try SyncClient.decoder.decode(SharedUsage.self, from: data)
+        XCTAssertEqual(decoded, blob)
+    }
+
+    func testSharedProviderConvertsToUsageAndFlagsStale() throws {
+        let now = iso("2026-06-02T12:00:00.000Z")
+        let provider = SharedProvider(
+            updatedAt: iso("2026-06-02T11:50:00.000Z"),  // 10 min old
+            updatedBy: "WorkLaptop",
+            short: SharedWindow(label: "5h", percent: 40, resetAt: nil),
+            long: SharedWindow(label: "7d", percent: 72, resetAt: nil),
+            detail: "Claude OAuth usage snapshot",
+            source: "Anthropic OAuth usage API"
+        )
+
+        let usage = provider.toProviderUsage(provider: .claude, now: now, staleAfter: 5 * 60)
+        XCTAssertEqual(usage.shortWindow.displayPercent, 40)
+        XCTAssertTrue(usage.shortWindow.isStale, "10-min-old blob is past the 5-min freshness window")
+        XCTAssertTrue(usage.detail.contains("via WorkLaptop"))
+        XCTAssertTrue(provider.isAvailable)
+    }
+
+    func testConfigLoaderReadsSyncSection() throws {
+        let root = try temporaryLogRoot()
+        let configURL = root.appendingPathComponent(".usage-meter.json")
+        try #"{"sync":{"enabled":true,"url":"https://ex.com/u/KEY","token":"secret"}}"#
+            .write(to: configURL, atomically: true, encoding: .utf8)
+
+        let sync = try XCTUnwrap(UsageConfigLoader().load(home: root).sync)
+        XCTAssertTrue(sync.isActive)
+        XCTAssertEqual(sync.url, "https://ex.com/u/KEY")
+        XCTAssertEqual(sync.token, "secret")
+        XCTAssertEqual(sync.freshnessSeconds, 90, "missing field falls back to default")
+    }
+
+    func testConfigLoaderDefaultsSyncToNil() throws {
+        let root = try temporaryLogRoot()
+        let configURL = root.appendingPathComponent(".usage-meter.json")
+        try #"{"codex":{"shortWindowHours":5,"longWindowDays":7,"shortLimitTokens":1,"longLimitTokens":2}}"#
+            .write(to: configURL, atomically: true, encoding: .utf8)
+        XCTAssertNil(UsageConfigLoader().load(home: root).sync)
+    }
+
     func testConfigLoaderReadsUserLimits() throws {
         let root = try temporaryLogRoot()
         let configURL = root.appendingPathComponent(".usage-meter.json")

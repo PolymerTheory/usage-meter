@@ -6,6 +6,7 @@ public final class UsageMonitor: @unchecked Sendable {
     private let claudeActivityReader: ClaudeActivityReader
     private let claudeAPIReader: ClaudeAPIUsageReader
     private let codexAPIReader: CodexAPIUsageReader
+    private let syncClient: SyncClient
     private let configLoader: UsageConfigLoader
     private let home: URL
 
@@ -16,6 +17,7 @@ public final class UsageMonitor: @unchecked Sendable {
         claudeActivityReader: ClaudeActivityReader? = nil,
         claudeAPIReader: ClaudeAPIUsageReader = ClaudeAPIUsageReader(),
         codexAPIReader: CodexAPIUsageReader = CodexAPIUsageReader(),
+        syncClient: SyncClient = SyncClient(),
         configLoader: UsageConfigLoader = UsageConfigLoader()
     ) {
         self.home = home
@@ -24,8 +26,12 @@ public final class UsageMonitor: @unchecked Sendable {
         self.claudeActivityReader = claudeActivityReader ?? ClaudeActivityReader(home: home)
         self.claudeAPIReader = claudeAPIReader
         self.codexAPIReader = codexAPIReader
+        self.syncClient = syncClient
         self.configLoader = configLoader
     }
+
+    /// Shared data older than this is still shown but flagged stale.
+    private static let syncDisplayStaleAfter: TimeInterval = 5 * 60
 
     /// Local log activity remains a fallback when Claude hooks are not installed.
     private static let activityWindow: TimeInterval = 30
@@ -78,7 +84,57 @@ public final class UsageMonitor: @unchecked Sendable {
             isActive: claudeActive
         )
 
+        if let sync = config.sync, sync.isActive {
+            return applySync(codex: codexUsage, claude: claudeUsage, sync: sync, now: now)
+        }
         return UsageSnapshot(providers: [codexUsage, claudeUsage], generatedAt: now)
+    }
+
+    /// Merge locally-fetched usage with the shared blob: fill any gap where this
+    /// device's data is unavailable/stale from another device, and publish the
+    /// providers this device fetched live so the others (and the phone) get them.
+    private func applySync(
+        codex: ProviderUsage,
+        claude: ProviderUsage,
+        sync: SyncConfig,
+        now: Date
+    ) -> UsageSnapshot {
+        let shared = syncClient.read(config: sync)
+        let host = Self.deviceName()
+
+        func merged(_ local: ProviderUsage, _ key: String, _ provider: UsageProvider) -> ProviderUsage {
+            // Use shared data only when our own reading isn't usable.
+            guard !isLive(local),
+                  let remote = shared?.providers[key], remote.isAvailable else {
+                return local
+            }
+            return remote.toProviderUsage(provider: provider, now: now, staleAfter: Self.syncDisplayStaleAfter)
+        }
+
+        let displayCodex = merged(codex, "codex", .codex)
+        let displayClaude = merged(claude, "claude", .claude)
+
+        // Publish only providers we fetched live, preserving other devices'
+        // contributions for the ones we couldn't.
+        var providers = shared?.providers ?? [:]
+        if isLive(codex) { providers["codex"] = SharedProvider(codex, at: now, by: host) }
+        if isLive(claude) { providers["claude"] = SharedProvider(claude, at: now, by: host) }
+        if !providers.isEmpty {
+            syncClient.publish(SharedUsage(updatedAt: now, updatedBy: host, providers: providers), config: sync)
+        }
+
+        return UsageSnapshot(providers: [displayCodex, displayClaude], generatedAt: now)
+    }
+
+    /// A provider reading is "live" when it has real data that isn't stale — i.e.
+    /// a fresh fetch this device just made, worth sharing.
+    private func isLive(_ usage: ProviderUsage) -> Bool {
+        !usage.isUnavailable && !usage.shortWindow.isStale && !usage.longWindow.isStale
+    }
+
+    private static func deviceName() -> String {
+        let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        return name.replacingOccurrences(of: ".local", with: "")
     }
 
     public func activityStates(now: Date = Date()) -> [UsageProvider: Bool] {
