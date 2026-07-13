@@ -80,8 +80,11 @@ public struct ProviderUsage: Equatable, Sendable {
         self.isActive = isActive
     }
 
+    /// The provider is only fully unavailable when neither window has data.
+    /// A single missing window (e.g. the API omits the idle 5-hour window) still
+    /// renders the available window rather than hiding the whole provider.
     public var isUnavailable: Bool {
-        shortWindow.unitName == "unavailable" || longWindow.unitName == "unavailable"
+        shortWindow.unitName == "unavailable" && longWindow.unitName == "unavailable"
     }
 }
 

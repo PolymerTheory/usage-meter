@@ -155,6 +155,35 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.source, "chatgpt.com usage API")
     }
 
+    func testCodexAPIUsageHandlesNullSecondaryWindow() throws {
+        // Newer API shape: only the 7-day window is present (as primary), and
+        // secondary_window is null. Must still surface the 7-day figure and
+        // mark the 5-hour slot unavailable rather than failing entirely.
+        let data = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "allowed": true,
+            "primary_window": {
+              "used_percent": 18,
+              "limit_window_seconds": 604800,
+              "reset_at": 1784493697
+            },
+            "secondary_window": null
+          }
+        }
+        """.data(using: .utf8)!
+
+        let usage = try XCTUnwrap(
+            CodexAPIUsageReader.providerUsage(from: data, now: iso("2026-06-02T12:00:00.000Z"), stale: false)
+        )
+
+        XCTAssertEqual(usage.longWindow.label, "7d")
+        XCTAssertEqual(usage.longWindow.displayPercent, 18)
+        XCTAssertEqual(usage.shortWindow.unitName, "unavailable")
+        XCTAssertFalse(usage.isUnavailable, "one available window should not hide the provider")
+    }
+
     func testCodexAPIUsageMarksCachedResponseStale() throws {
         let data = """
         {"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1782249854},

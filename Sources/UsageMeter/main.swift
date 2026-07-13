@@ -55,7 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         model.refreshQuota()
 
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        // Poll quota every 2 minutes. The Claude reader additionally throttles
+        // its own live calls (see ClaudeAPIUsageReader.minLiveInterval) so this
+        // cadence — plus popover-open refreshes — can't burst-hit that API.
+        Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.model.refreshQuota()
             }

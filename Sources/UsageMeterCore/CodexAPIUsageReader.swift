@@ -37,61 +37,79 @@ public struct CodexAPIUsageReader {
         return usage
     }
 
+    // Windows at or under this length fill the "short" (5h) display slot;
+    // longer ones fill the "long" (7d) slot.
+    private static let shortWindowMaxSeconds: Double = 6 * 60 * 60
+
     /// Parse a usage response body into a `ProviderUsage`. Exposed for tests.
+    ///
+    /// The ChatGPT usage endpoint returns one or more windows under
+    /// `rate_limit` (`primary_window`, `secondary_window`). The position→length
+    /// mapping is NOT fixed and a window can be `null` (e.g. only the 7-day
+    /// window is reported when the 5-hour one is idle), so classify each present
+    /// window by its own `limit_window_seconds` and tolerate a missing slot.
     public static func providerUsage(from data: Data, now: Date, stale: Bool) -> ProviderUsage? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rateLimit = root["rate_limit"] as? [String: Any] else {
             return nil
         }
 
-        let primary = window(
-            from: rateLimit["primary_window"] as? [String: Any],
-            fallbackLabelSeconds: 5 * 60 * 60,
-            stale: stale
-        )
-        let secondary = window(
-            from: rateLimit["secondary_window"] as? [String: Any],
-            fallbackLabelSeconds: 7 * 24 * 60 * 60,
-            stale: stale
-        )
+        var shortWindow: UsageWindow?
+        var longWindow: UsageWindow?
+        for key in ["primary_window", "secondary_window"] {
+            guard let obj = rateLimit[key] as? [String: Any],
+                  let percent = numeric(obj["used_percent"]) else {
+                continue
+            }
+            let seconds = numeric(obj["limit_window_seconds"]) ?? 0
+            let isShort = seconds > 0 && seconds <= shortWindowMaxSeconds
+            let window = UsageWindow(
+                label: windowLabel(seconds: seconds > 0 ? seconds : (isShort ? 5 * 3600 : 7 * 86400)),
+                usedUnits: Int(percent.rounded()),
+                limitUnits: 100,
+                resetDate: numeric(obj["reset_at"]).map { Date(timeIntervalSince1970: $0) },
+                isEstimated: false,
+                usedPercent: percent,
+                unitName: "quota",
+                isStale: stale
+            )
+            if isShort {
+                shortWindow = mostConstrained(shortWindow, window)
+            } else {
+                longWindow = mostConstrained(longWindow, window)
+            }
+        }
 
-        guard let primary, let secondary else { return nil }
+        // Need at least one real window to consider this a usable reading.
+        guard shortWindow != nil || longWindow != nil else { return nil }
 
         let plan = (root["plan_type"] as? String).map { " (\($0))" } ?? ""
-        let detail = stale
-            ? "Cached Codex usage\(plan)"
-            : "Codex live usage\(plan)"
+        let detail = stale ? "Cached Codex usage\(plan)" : "Codex live usage\(plan)"
 
         return ProviderUsage(
             provider: .codex,
-            shortWindow: primary,
-            longWindow: secondary,
+            shortWindow: shortWindow ?? unavailableWindow(label: "5h"),
+            longWindow: longWindow ?? unavailableWindow(label: "7d"),
             detail: detail,
             source: "chatgpt.com usage API",
             lastUpdated: now
         )
     }
 
-    private static func window(
-        from object: [String: Any]?,
-        fallbackLabelSeconds: Double,
-        stale: Bool
-    ) -> UsageWindow? {
-        guard let object, let percent = numeric(object["used_percent"]) else {
-            return nil
-        }
-        let windowSeconds = numeric(object["limit_window_seconds"]) ?? fallbackLabelSeconds
-        let reset = numeric(object["reset_at"]).map { Date(timeIntervalSince1970: $0) }
+    private static func mostConstrained(_ a: UsageWindow?, _ b: UsageWindow) -> UsageWindow {
+        guard let a else { return b }
+        return (b.usedPercent ?? 0) > (a.usedPercent ?? 0) ? b : a
+    }
 
-        return UsageWindow(
-            label: windowLabel(seconds: windowSeconds),
-            usedUnits: Int(percent.rounded()),
+    private static func unavailableWindow(label: String) -> UsageWindow {
+        UsageWindow(
+            label: label,
+            usedUnits: 0,
             limitUnits: 100,
-            resetDate: reset,
+            resetDate: nil,
             isEstimated: false,
-            usedPercent: percent,
-            unitName: "quota",
-            isStale: stale
+            usedPercent: nil,
+            unitName: "unavailable"
         )
     }
 
