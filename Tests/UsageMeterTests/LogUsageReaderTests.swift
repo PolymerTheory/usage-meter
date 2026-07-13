@@ -184,6 +184,29 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertFalse(usage.isUnavailable, "one available window should not hide the provider")
     }
 
+    func testCodexAPIUsageClassifiesWindowsByLengthNotPosition() throws {
+        // Windows may arrive in any slot or under renamed keys; classification
+        // must follow limit_window_seconds. Here the 5h window is in the
+        // "secondary" slot and a renamed key carries the 7d window.
+        let data = """
+        {
+          "rate_limit": {
+            "some_new_window_key": { "used_percent": 44, "limit_window_seconds": 604800, "reset_at": 1784493697 },
+            "secondary_window": { "used_percent": 12, "limit_window_seconds": 18000, "reset_at": 1782249854 }
+          }
+        }
+        """.data(using: .utf8)!
+
+        let usage = try XCTUnwrap(
+            CodexAPIUsageReader.providerUsage(from: data, now: iso("2026-06-02T12:00:00.000Z"), stale: false)
+        )
+
+        XCTAssertEqual(usage.shortWindow.label, "5h")
+        XCTAssertEqual(usage.shortWindow.displayPercent, 12)
+        XCTAssertEqual(usage.longWindow.label, "7d")
+        XCTAssertEqual(usage.longWindow.displayPercent, 44)
+    }
+
     func testCodexAPIUsageMarksCachedResponseStale() throws {
         let data = """
         {"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1782249854},

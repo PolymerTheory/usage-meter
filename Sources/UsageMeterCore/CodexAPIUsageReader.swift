@@ -54,17 +54,22 @@ public struct CodexAPIUsageReader {
             return nil
         }
 
+        // Scan every window-shaped object under rate_limit rather than relying
+        // on the specific keys "primary_window"/"secondary_window", so a future
+        // rename or an added window (OpenAI has changed this before) still maps
+        // correctly. Each window is classified purely by its own declared
+        // length, so it doesn't matter which slot it arrives in or in what order.
         var shortWindow: UsageWindow?
         var longWindow: UsageWindow?
-        for key in ["primary_window", "secondary_window"] {
-            guard let obj = rateLimit[key] as? [String: Any],
-                  let percent = numeric(obj["used_percent"]) else {
+        for (_, value) in rateLimit {
+            guard let obj = value as? [String: Any],
+                  let percent = numeric(obj["used_percent"]),
+                  let seconds = numeric(obj["limit_window_seconds"]), seconds > 0 else {
                 continue
             }
-            let seconds = numeric(obj["limit_window_seconds"]) ?? 0
-            let isShort = seconds > 0 && seconds <= shortWindowMaxSeconds
+            let isShort = seconds <= shortWindowMaxSeconds
             let window = UsageWindow(
-                label: windowLabel(seconds: seconds > 0 ? seconds : (isShort ? 5 * 3600 : 7 * 86400)),
+                label: windowLabel(seconds: seconds),
                 usedUnits: Int(percent.rounded()),
                 limitUnits: 100,
                 resetDate: numeric(obj["reset_at"]).map { Date(timeIntervalSince1970: $0) },
