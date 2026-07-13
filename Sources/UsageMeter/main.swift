@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         popover.behavior = .applicationDefined   // we manage dismissal manually
         popover.delegate = self
-        popover.contentSize = NSSize(width: 380, height: 390)
+        popover.contentSize = NSSize(width: 380, height: 430)
         popover.contentViewController = NSHostingController(
             rootView: UsagePopoverView(
                 model: model,
@@ -417,7 +417,7 @@ struct UsagePopoverView: View {
             }
         }
         .padding(16)
-        .frame(width: 380, height: 390)
+        .frame(width: 380, height: 430)
     }
 
     private var usageView: some View {
@@ -489,6 +489,8 @@ struct SyncSettingsView: View {
                     .font(.caption)
             }
 
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
             Text("Optional. Publishes your usage to a URL you control so your other installs — and a phone view — can share it. Off by default; no data leaves your machine unless enabled.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -547,7 +549,9 @@ struct SyncSettingsView: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
+                }
+                .padding(.bottom, 4)
+            }
         }
     }
 
