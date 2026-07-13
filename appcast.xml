@@ -3,6 +3,15 @@
     <channel>
         <title>UsageMeter</title>
         <item>
+            <title>0.2.6</title>
+            <pubDate>Mon, 13 Jul 2026 17:29:32 +0200</pubDate>
+            <link>https://github.com/PolymerTheory/usage-meter</link>
+            <sparkle:version>206</sparkle:version>
+            <sparkle:shortVersionString>0.2.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/PolymerTheory/usage-meter/releases/download/v0.2.6/UsageMeter.zip" length="1723333" type="application/octet-stream" sparkle:edSignature="2/o2qLlp7Bw/ii56AElwFgMVMj4Hg/JiVpExaYTizftvGWp7MWGKdSiPl4grvXqRPDd1wQLX8TfOemVz75qECg=="/>
+        </item>
+        <item>
             <title>0.2.5</title>
             <pubDate>Mon, 13 Jul 2026 11:28:44 +0200</pubDate>
             <link>https://github.com/PolymerTheory/usage-meter</link>
