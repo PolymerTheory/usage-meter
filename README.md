@@ -125,6 +125,16 @@ You can override the token limits used for Codex fallback estimates. Create `~/.
 
 These values only affect the estimated token-log mode. The live ChatGPT and Anthropic usage APIs (and exact Codex `rate_limits` snapshots) always take priority.
 
+## Sync across devices (optional)
+
+Off by default. If you run UsageMeter on more than one computer — or want to
+glance at your usage on your phone — you can enable sync via the 📡 icon in the
+popover. Each install publishes its usage to a small endpoint **you** control
+(bring-your-own; no default server, only usage percentages are stored, never
+tokens), so your machines share one account's numbers and a scannable **phone
+view** can show them from anywhere. See **[docs/sync.md](docs/sync.md)** for
+setup (a ~5-minute free Cloudflare Worker or your own Supabase).
+
 ## Uninstall
 
 ```sh

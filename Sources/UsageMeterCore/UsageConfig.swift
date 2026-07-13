@@ -32,6 +32,13 @@ public struct UsageMeterConfig: Codable, Equatable, Sendable {
         self.claude = try c.decodeIfPresent(ProviderConfig.self, forKey: .claude) ?? .claudeDefault
         self.sync = try c.decodeIfPresent(SyncConfig.self, forKey: .sync)
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(codex, forKey: .codex)
+        try c.encode(claude, forKey: .claude)
+        try c.encodeIfPresent(sync, forKey: .sync)
+    }
 }
 
 /// Optional sync backend: the app publishes its usage to `url` and reads it
@@ -109,5 +116,15 @@ public struct UsageConfigLoader {
             return .default
         }
         return config
+    }
+
+    /// Update only the sync section, preserving everything else in the file.
+    public func saveSync(_ sync: SyncConfig?, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        var config = load(home: home)
+        config.sync = sync
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(config)
+        try data.write(to: home.appendingPathComponent(".usage-meter.json"), options: .atomic)
     }
 }

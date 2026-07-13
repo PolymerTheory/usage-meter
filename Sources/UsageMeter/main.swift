@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import Sparkle
 import SwiftUI
 import UsageMeterCore
@@ -309,11 +310,24 @@ enum UsageMeterMain {
 final class UsageViewModel: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
     @Published private(set) var claudeHooksInstalled = false
+    @Published var syncConfig: SyncConfig
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
+    private let configLoader = UsageConfigLoader()
 
     init() {
+        syncConfig = UsageConfigLoader().load().sync ?? SyncConfig()
         refreshClaudeHookStatus()
+    }
+
+    /// Persist the sync section (clearing it entirely when disabled and empty),
+    /// then refresh so the change takes effect immediately.
+    func saveSyncConfig() {
+        let trimmed = syncConfig.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        syncConfig.url = trimmed
+        let toSave: SyncConfig? = (syncConfig.enabled || !trimmed.isEmpty) ? syncConfig : nil
+        try? configLoader.saveSync(toSave)
+        refreshQuota()
     }
 
     func installClaudeHooks() {
@@ -370,10 +384,23 @@ final class UsageViewModel: ObservableObject {
 struct UsagePopoverView: View {
     @ObservedObject var model: UsageViewModel
     let checkForUpdates: () -> Void
+    @State private var showingSync = false
 
     static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
 
     var body: some View {
+        Group {
+            if showingSync {
+                SyncSettingsView(model: model, onClose: { showingSync = false })
+            } else {
+                usageView
+            }
+        }
+        .padding(16)
+        .frame(width: 380, height: 390)
+    }
+
+    private var usageView: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
                 Text("AI Usage")
@@ -382,6 +409,11 @@ struct UsagePopoverView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button(action: { showingSync = true }) {
+                    Image(systemName: model.syncConfig.isActive ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                }
+                .buttonStyle(.borderless)
+                .help("Sync across devices")
                 Button(action: checkForUpdates) {
                     Image(systemName: "arrow.down.circle")
                 }
@@ -411,8 +443,102 @@ struct UsagePopoverView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(16)
-        .frame(width: 380, height: 390)
+    }
+}
+
+/// Bring-your-own sync configuration + a QR to pair a read-only phone view.
+struct SyncSettingsView: View {
+    @ObservedObject var model: UsageViewModel
+    let onClose: () -> Void
+
+    /// Static page (host anywhere) that reads the sync data and renders it.
+    static let phonePageURL = "https://polymertheory.github.io/usage-meter/phone.html"
+    static let setupDocsURL = "https://github.com/PolymerTheory/usage-meter/blob/main/docs/sync.md"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button(action: onClose) {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                Text("Device Sync")
+                    .font(.headline)
+                Spacer()
+                Link("Setup guide", destination: URL(string: Self.setupDocsURL)!)
+                    .font(.caption)
+            }
+
+            Text("Optional. Publishes your usage to a URL you control so your other installs — and a phone view — can share it. Off by default; no data leaves your machine unless enabled.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Enable sync", isOn: $model.syncConfig.enabled)
+                .toggleStyle(.switch)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Sync URL").font(.caption2).foregroundStyle(.secondary)
+                TextField("https://your-endpoint.example/u/KEY", text: $model.syncConfig.url)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption.monospaced())
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Token (optional)").font(.caption2).foregroundStyle(.secondary)
+                TextField("bearer token", text: Binding(
+                    get: { model.syncConfig.token ?? "" },
+                    set: { model.syncConfig.token = $0.isEmpty ? nil : $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .font(.caption.monospaced())
+            }
+
+            Button("Save", action: model.saveSyncConfig)
+                .keyboardShortcut(.defaultAction)
+
+            if model.syncConfig.isActive {
+                Divider()
+                HStack(alignment: .top, spacing: 12) {
+                    if let qr = QRCode.image(from: Self.pairingURL(model.syncConfig), size: 120) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 120, height: 120)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Phone view").font(.subheadline.weight(.semibold))
+                        Text("Scan to open a live page on your phone, then Add to Home Screen. The token stays in the link fragment and never reaches the page host.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    static func pairingURL(_ sync: SyncConfig) -> String {
+        func enc(_ s: String) -> String {
+            s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        }
+        return "\(phonePageURL)#u=\(enc(sync.url))&t=\(enc(sync.token ?? ""))"
+    }
+}
+
+enum QRCode {
+    static func image(from string: String, size: CGFloat) -> NSImage? {
+        guard let data = string.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scale = size / output.extent.width
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let rep = NSCIImageRep(ciImage: scaled)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
     }
 }
 

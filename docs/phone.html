@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0f14">
+<title>AI Usage</title>
+<style>
+  :root {
+    --bg: #0b0f14; --card: #151b23; --text: #e7edf3; --muted: #8b97a5;
+    --track: #263140; --green: #34c759; --yellow: #ffcc00; --red: #ff3b30; --gray: #5b6673;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f2f4f7; --card:#fff; --text:#1a2230; --muted:#66707d; --track:#e3e8ee; }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, system-ui, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+    -webkit-font-smoothing: antialiased;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  #updated { color: var(--muted); font-size: 12px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+  .card h2 { font-size: 16px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .card h2 .src { font-size: 11px; color: var(--muted); font-weight: 500; }
+  .row { margin: 10px 0; }
+  .row .top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+  .row .top .lbl { color: var(--muted); }
+  .row .top .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .bar { height: 8px; background: var(--track); border-radius: 5px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: 5px; transition: width .4s ease; }
+  .reset { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .detail { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  #msg { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 14px; line-height: 1.5; }
+  a { color: #4a9eff; }
+</style>
+</head>
+<body>
+<header><h1>AI Usage</h1><span id="updated"></span></header>
+<div id="content"></div>
+<div id="msg">Loading…</div>
+<script>
+(function () {
+  // Read config from the URL fragment (never sent to a server) or localStorage.
+  function parseHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    if (!h) return null;
+    var p = {}; h.split("&").forEach(function (kv) {
+      var i = kv.indexOf("="); if (i < 0) return;
+      p[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+    });
+    return p.u ? { url: p.u, token: p.t || "" } : null;
+  }
+  var cfg = parseHash();
+  if (cfg) { localStorage.setItem("usagemeter.cfg", JSON.stringify(cfg)); }
+  else { try { cfg = JSON.parse(localStorage.getItem("usagemeter.cfg")); } catch (e) {} }
+
+  var content = document.getElementById("content");
+  var msgEl = document.getElementById("msg");
+  var updatedEl = document.getElementById("updated");
+
+  function msg(t) { msgEl.textContent = t; msgEl.style.display = t ? "block" : "none"; }
+
+  function color(pct) {
+    if (pct == null) return "var(--gray)";
+    if (pct < 55) return "var(--green)";
+    if (pct < 80) return "var(--yellow)";
+    return "var(--red)";
+  }
+  function ago(iso) {
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 90) return "just now";
+    if (s < 3600) return Math.round(s / 60) + "m ago";
+    if (s < 86400) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  }
+  function until(iso) {
+    if (!iso) return "";
+    var s = (new Date(iso).getTime() - Date.now()) / 1000;
+    if (s <= 0) return "resetting…";
+    var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    if (d >= 1) return "resets in " + d + "d " + h + "h";
+    if (h >= 1) return "resets in " + h + "h " + m + "m";
+    return "resets in " + m + "m";
+  }
+  function windowRow(w) {
+    var pct = (w && w.percent != null) ? w.percent : null;
+    var pctText = pct == null ? "n/a" : (Math.round(pct * 10) / 10) + "%";
+    var width = pct == null ? 0 : Math.min(100, Math.max(2, pct));
+    return '<div class="row"><div class="top"><span class="lbl">' + (w ? w.label : "") + '</span>' +
+      '<span class="pct">' + pctText + '</span></div>' +
+      '<div class="bar"><span style="width:' + width + '%;background:' + color(pct) + '"></span></div>' +
+      (pct == null ? "" : '<div class="reset">' + until(w.resetAt) + "</div>") + "</div>";
+  }
+  function card(name, p) {
+    if (!p) return "";
+    return '<div class="card"><h2>' + name + '<span class="src">' + (p.source || "") + "</span></h2>" +
+      windowRow(p.short) + windowRow(p.long) +
+      '<div class="detail">' + (p.detail || "") + "</div></div>";
+  }
+
+  function render(blob) {
+    var pr = (blob && blob.providers) || {};
+    if (!pr.codex && !pr.claude) {
+      content.innerHTML = "";
+      updatedEl.textContent = "";
+      msg("No usage published yet. Make sure a laptop with sync enabled is running.");
+      return;
+    }
+    content.innerHTML = card("Codex", pr.codex) + card("Claude", pr.claude);
+    updatedEl.textContent = blob.updatedAt ? "updated " + ago(blob.updatedAt) : "";
+    msg("");
+  }
+
+  function load() {
+    if (!cfg || !cfg.url) { msg("Not configured. Open the QR link from the app on this device."); return; }
+    var headers = {};
+    if (cfg.token) headers["Authorization"] = "Bearer " + cfg.token;
+    fetch(cfg.url, { headers: headers, cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(render)
+      .catch(function (e) {
+        if (!content.innerHTML) msg("Couldn't load usage (" + e.message + "). If this says a network/CORS error, the endpoint must send CORS headers — see the setup guide.");
+      });
+  }
+  load();
+  setInterval(load, 120000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) load(); });
+})();
+</script>
+</body>
+</html>
