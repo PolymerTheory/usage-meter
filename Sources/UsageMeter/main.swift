@@ -311,6 +311,9 @@ final class UsageViewModel: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
     @Published private(set) var claudeHooksInstalled = false
     @Published var syncConfig: SyncConfig
+    @Published var syncSaved = false
+    @Published var syncTestResult: String?
+    @Published var syncTesting = false
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
     private let configLoader = UsageConfigLoader()
@@ -327,7 +330,24 @@ final class UsageViewModel: ObservableObject {
         syncConfig.url = trimmed
         let toSave: SyncConfig? = (syncConfig.enabled || !trimmed.isEmpty) ? syncConfig : nil
         try? configLoader.saveSync(toSave)
+        syncSaved = true
+        syncTestResult = nil
         refreshQuota()
+    }
+
+    /// Read-only reachability check so the user gets real feedback instead of
+    /// silence. Never writes, so it can't overwrite shared data.
+    func testSyncConnection() {
+        let config = syncConfig
+        syncTesting = true
+        syncTestResult = nil
+        Task {
+            let result = await Task.detached(priority: .utility) {
+                SyncClient().probe(config: config)
+            }.value
+            self.syncTesting = false
+            self.syncTestResult = (result.isSuccess ? "✓ " : "✕ ") + result.message
+        }
     }
 
     func installClaudeHooks() {
@@ -479,22 +499,35 @@ struct SyncSettingsView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Sync URL").font(.caption2).foregroundStyle(.secondary)
-                TextField("https://your-endpoint.example/u/KEY", text: $model.syncConfig.url)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.caption.monospaced())
+                TextField("https://your-endpoint.example/u/KEY", text: Binding(
+                    get: { model.syncConfig.url },
+                    set: { model.syncConfig.url = $0; model.syncSaved = false; model.syncTestResult = nil }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .font(.caption.monospaced())
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text("Token (optional)").font(.caption2).foregroundStyle(.secondary)
                 TextField("bearer token", text: Binding(
                     get: { model.syncConfig.token ?? "" },
-                    set: { model.syncConfig.token = $0.isEmpty ? nil : $0 }
+                    set: { model.syncConfig.token = $0.isEmpty ? nil : $0; model.syncSaved = false }
                 ))
                 .textFieldStyle(.roundedBorder)
                 .font(.caption.monospaced())
             }
 
-            Button("Save", action: model.saveSyncConfig)
-                .keyboardShortcut(.defaultAction)
+            HStack(spacing: 10) {
+                Button("Save", action: model.saveSyncConfig)
+                    .keyboardShortcut(.defaultAction)
+                Button(model.syncTesting ? "Testing…" : "Test connection", action: model.testSyncConnection)
+                    .disabled(model.syncTesting || urlLooksEmpty)
+                if model.syncSaved {
+                    Label("Saved", systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                }
+            }
+
+            statusLine
 
             if model.syncConfig.isActive {
                 Divider()
@@ -515,6 +548,31 @@ struct SyncSettingsView: View {
                 }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    private var urlLooksEmpty: Bool {
+        model.syncConfig.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// One line telling the user exactly where they stand.
+    @ViewBuilder private var statusLine: some View {
+        if let result = model.syncTestResult {
+            Text(result)
+                .font(.caption)
+                .foregroundStyle(result.hasPrefix("✓") ? Color.green : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if model.syncConfig.enabled && urlLooksEmpty {
+            Text("Enter a Sync URL above, then Save. See the setup guide to create one.")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if model.syncConfig.isActive {
+            Text("Configured. Use Test connection to verify it works, then scan the code below on your phone.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Disabled — the app runs locally only.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

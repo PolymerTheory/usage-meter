@@ -139,8 +139,53 @@ public struct SyncClient {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         apply(token: config.token, to: &request)
 
-        guard let data = perform(request), !data.isEmpty else { return nil }
+        guard let (data, status) = perform(request), (200..<300).contains(status),
+              let data, !data.isEmpty else { return nil }
         return try? Self.decoder.decode(SharedUsage.self, from: data)
+    }
+
+    public enum ProbeResult: Equatable, Sendable {
+        case ok
+        case unauthorized
+        case reachableNoData
+        case badURL
+        case unreachable(String)
+
+        public var message: String {
+            switch self {
+            case .ok: return "Connected — endpoint is reachable."
+            case .reachableNoData: return "Connected — endpoint reachable (no data published yet)."
+            case .unauthorized: return "Reached the server, but the token was rejected (401/403). Check the token."
+            case .badURL: return "That doesn't look like a valid URL."
+            case let .unreachable(why): return "Couldn't reach the endpoint: \(why)"
+            }
+        }
+
+        public var isSuccess: Bool { self == .ok || self == .reachableNoData }
+    }
+
+    /// A read-only reachability check for the settings UI — never writes, so it
+    /// can't clobber real data. Distinguishes "works", "bad token", and
+    /// "unreachable" so the user gets actionable feedback.
+    public func probe(config: SyncConfig) -> ProbeResult {
+        let trimmed = config.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), url.scheme != nil, url.host != nil else {
+            return .badURL
+        }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        apply(token: config.token, to: &request)
+
+        guard let (data, status) = perform(request) else {
+            return .unreachable("no response (offline, wrong host, or CORS/DNS)")
+        }
+        switch status {
+        case 401, 403: return .unauthorized
+        case 404: return .reachableNoData
+        case 200..<300: return (data?.isEmpty ?? true) ? .reachableNoData : .ok
+        default: return .unreachable("HTTP \(status)")
+        }
     }
 
     @discardableResult
@@ -152,7 +197,8 @@ public struct SyncClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         apply(token: config.token, to: &request)
-        return perform(request) != nil
+        if let (_, status) = perform(request) { return (200..<300).contains(status) }
+        return false
     }
 
     private func apply(token: String?, to request: inout URLRequest) {
@@ -161,17 +207,16 @@ public struct SyncClient {
         }
     }
 
-    /// Synchronous request; returns the body on a 2xx response, else nil.
-    private func perform(_ request: URLRequest) -> Data? {
+    /// Synchronous request. Returns `(body, statusCode)` when an HTTP response
+    /// arrives (any status), or nil on a transport-level failure (offline, DNS,
+    /// timeout). `read`/`publish` still treat only 2xx as usable.
+    private func perform(_ request: URLRequest) -> (Data?, Int)? {
         let semaphore = DispatchSemaphore(value: 0)
-        var result: Data?
+        var result: (Data?, Int)?
         let task = session.dataTask(with: request) { data, response, _ in
             defer { semaphore.signal() }
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else {
-                return
-            }
-            result = data ?? Data()
+            guard let http = response as? HTTPURLResponse else { return }
+            result = (data, http.statusCode)
         }
         task.resume()
         if semaphore.wait(timeout: .now() + timeout + 2) == .timedOut {
