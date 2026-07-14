@@ -26,16 +26,17 @@ Click the icon to open a detail popover with exact percentages, reset times, and
 
 **Data sources:**
 
-- **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using OAuth credentials that Claude Code makes available locally. UsageMeter first tries a token captured from its Claude Code lifecycle hook, then legacy Claude Code credentials. Falls back to the most recent cached response if the API is unavailable, and marks that cached value with `~`. Its activity dot uses [Claude Code hooks](https://code.claude.com/docs/en/hooks) for prompt, tool, stop, failure, permission, and idle events.
+- **Claude** — reads the [Anthropic OAuth usage endpoint](https://api.anthropic.com/api/oauth/usage) using the OAuth credentials Claude Code stores locally (the `Claude Code-credentials` Keychain item or `~/.claude/.credentials.json`). It refreshes an expired access token when it can; if the sign-in has fully lapsed it shows *"Claude Code sign-in expired — run `claude login`"*. Rate-limited or briefly-unavailable responses fall back to the most recent cached value, marked with `~`. Its activity dot uses [Claude Code hooks](https://code.claude.com/docs/en/hooks) for prompt, tool, stop, failure, permission, and idle events.
 - **Codex** — reads the live ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) using the OAuth credentials Codex stores in `~/.codex/auth.json`, so the figures match the Codex dashboard even when Codex has been idle. If the endpoint is unavailable it falls back to the most recent cached response, then to local `codex.rate_limits` log snapshots (`~/.codex/logs_2.sqlite`, legacy `~/.codex/sqlite/logs_2.sqlite`, or `~/.codex/sessions`), and finally to token-counting estimates. The activity dot selects the freshest database and supports both modern response-stream pulses and legacy app-server events.
 
-Quota data refreshes every 5 minutes and also on every popover open. Activity
-dots refresh about once per second.
+Quota data refreshes every 2 minutes and also on every popover open. Activity
+dots refresh every couple of seconds. The active-dot has a contrasting outline
+so it stays visible on any menu-bar background, including live wallpapers.
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- **Claude**: [Claude Code](https://claude.ai/code) with UsageMeter hooks enabled. Recent Claude desktop / local-agent auth stores tokens in an encrypted cache that UsageMeter does not read directly; instead, UsageMeter captures the live OAuth token exposed to hook subprocesses and stores it in its own macOS Keychain item. If Claude usage is stale, run the diagnostics command below and then run one Claude Code turn so the hook can refresh UsageMeter's token.
+- **Claude**: [Claude Code](https://claude.ai/code) signed in locally — UsageMeter reads the OAuth credentials it stores. If Claude usage shows *"sign-in expired"*, run `claude login` (or `/login` in a Claude Code session) to refresh them. Enable the activity dot via **Enable Claude activity** in the popover.
 - **Codex**: The [Codex desktop app](https://openai.com/codex) or CLI, signed in and used at least once.
 
 ## Install
@@ -128,12 +129,20 @@ These values only affect the estimated token-log mode. The live ChatGPT and Anth
 ## Sync across devices (optional)
 
 Off by default. If you run UsageMeter on more than one computer — or want to
-glance at your usage on your phone — you can enable sync via the 📡 icon in the
-popover. Each install publishes its usage to a small endpoint **you** control
+glance at your usage on your phone — enable sync via the 📡 icon in the popover.
+Each install publishes its usage to a small endpoint **you** control
 (bring-your-own; no default server, only usage percentages are stored, never
 tokens), so your machines share one account's numbers and a scannable **phone
-view** can show them from anywhere. See **[docs/sync.md](docs/sync.md)** for
-setup (a ~5-minute free Cloudflare Worker or your own Supabase).
+view** can show them from anywhere.
+
+- **Setup:** see **[docs/sync.md](docs/sync.md)** — a free **Supabase** Edge
+  Function (recommended) or a **Cloudflare** Worker, both step-by-step.
+- **Reduce cross-device polling:** an optional toggle makes only one device poll
+  the provider APIs per interval while the others reuse the shared reading —
+  handy with several machines.
+- **Durable credentials:** your sync URL and token are mirrored to a backup in
+  `~/Library/Application Support/UsageMeter/`, so they survive an accidental loss
+  of `~/.usage-meter.json` and are restored automatically.
 
 ## Uninstall
 
@@ -144,12 +153,12 @@ rm -f ~/Library/LaunchAgents/io.github.PolymerTheory.UsageMeter.plist
 pkill -x UsageMeter
 rm -rf ~/Applications/UsageMeter.app
 rm -rf ~/Library/Caches/UsageMeter            # cached usage data
-rm -f ~/Library/Application\ Support/UsageMeter/instance.lock
+rm -rf ~/Library/Application\ Support/UsageMeter   # lock + sync-credential backup
 ```
 
 ## Known limitations
 
-- **Claude live usage depends on Claude Code hooks.** UsageMeter does not decrypt Claude desktop's encrypted token cache. It captures the OAuth token Claude Code exposes to hook subprocesses and stores that in UsageMeter's own macOS Keychain item (`UsageMeter-Claude-OAuth`). If hooks have not fired recently, UsageMeter may still show a stale cached Claude value until the next Claude Code turn.
+- **Claude live usage needs a valid Claude Code sign-in.** UsageMeter reads Claude Code's stored OAuth credentials and refreshes the access token when it can. If *both* the access and refresh tokens have expired, it shows a *"run `claude login`"* prompt until you re-authenticate. It does not decrypt the Claude desktop app's separate encrypted token cache.
 - **Unofficial APIs.** The Anthropic OAuth usage endpoint, the ChatGPT usage endpoint, and the Codex log format are all undocumented and may change without notice. If usage data stops appearing, check the [Issues](../../issues) page.
 - **Claude usage API lag.** The Anthropic usage endpoint is not real-time — figures can lag actual usage by a few minutes. If you have just hit your limit you may briefly see e.g. 95% before the API catches up to 100%.
 - **Codex usage lag when offline.** Codex quota is normally live (via the ChatGPT usage endpoint). If that endpoint can't be reached, the app falls back to local log snapshots, which are only as fresh as the most recent Codex activity; such values are shown with a leading `~`.

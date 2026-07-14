@@ -393,6 +393,34 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertFalse(sync.coordinate, "coordination is off unless set")
     }
 
+    func testSyncCredentialsRestoredFromBackupWhenMainFileLost() throws {
+        let root = try temporaryLogRoot()
+        let loader = UsageConfigLoader()
+
+        // Save sync — this should also write the backup.
+        try loader.saveSync(SyncConfig(enabled: true, url: "https://ex.com/u/K", token: "secret"), home: root)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("Library/Application Support/UsageMeter/sync-backup.json").path))
+
+        // Simulate the main config being deleted/clobbered.
+        try? FileManager.default.removeItem(at: root.appendingPathComponent(".usage-meter.json"))
+
+        // Loading should restore the sync section from the backup and heal the file.
+        let restored = try XCTUnwrap(loader.load(home: root).sync)
+        XCTAssertEqual(restored.url, "https://ex.com/u/K")
+        XCTAssertEqual(restored.token, "secret")
+        XCTAssertNotNil(loader.load(home: root).sync, "main file should be healed")
+    }
+
+    func testDisablingSyncRemovesBackupSoItIsNotResurrected() throws {
+        let root = try temporaryLogRoot()
+        let loader = UsageConfigLoader()
+        try loader.saveSync(SyncConfig(enabled: true, url: "https://ex.com/u/K", token: "t"), home: root)
+        try loader.saveSync(nil, home: root) // user turns sync off
+        try? FileManager.default.removeItem(at: root.appendingPathComponent(".usage-meter.json"))
+        XCTAssertNil(loader.load(home: root).sync, "a deliberate disable must not be restored")
+    }
+
     func testConfigLoaderReadsCoordinateFlag() throws {
         let root = try temporaryLogRoot()
         try #"{"sync":{"enabled":true,"url":"https://ex.com/u/K","coordinate":true,"freshnessSeconds":200}}"#

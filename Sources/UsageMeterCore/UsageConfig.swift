@@ -124,6 +124,34 @@ public struct UsageConfigLoader {
     }
 
     public func load(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> UsageMeterConfig {
+        var config = readMain(home: home)
+
+        // Sync credentials are hard to re-enter, so they're mirrored to a backup
+        // outside the main config file. If the main file is missing or lost its
+        // sync section (e.g. hand-edited, or clobbered), restore it from the
+        // backup and heal the main file. If the main file has sync but no backup
+        // exists yet, seed the backup.
+        if config.sync == nil, let backup = readSyncBackup(home: home), !backup.url.isEmpty {
+            config.sync = backup
+            try? writeMain(config, home: home)
+        } else if let sync = config.sync, !sync.url.isEmpty, readSyncBackup(home: home) == nil {
+            writeSyncBackup(sync, home: home)
+        }
+        return config
+    }
+
+    /// Update only the sync section, preserving everything else in the file, and
+    /// mirror it to the backup.
+    public func saveSync(_ sync: SyncConfig?, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        var config = readMain(home: home)
+        config.sync = sync
+        try writeMain(config, home: home)
+        writeSyncBackup(sync, home: home)
+    }
+
+    // MARK: - File helpers
+
+    private func readMain(home: URL) -> UsageMeterConfig {
         let url = home.appendingPathComponent(".usage-meter.json")
         guard fileManager.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
@@ -133,13 +161,35 @@ public struct UsageConfigLoader {
         return config
     }
 
-    /// Update only the sync section, preserving everything else in the file.
-    public func saveSync(_ sync: SyncConfig?, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
-        var config = load(home: home)
-        config.sync = sync
+    private func writeMain(_ config: UsageMeterConfig, home: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(config)
-        try data.write(to: home.appendingPathComponent(".usage-meter.json"), options: .atomic)
+        try encoder.encode(config).write(to: home.appendingPathComponent(".usage-meter.json"), options: .atomic)
+    }
+
+    private func syncBackupURL(home: URL) -> URL {
+        home.appendingPathComponent("Library/Application Support/UsageMeter/sync-backup.json")
+    }
+
+    private func readSyncBackup(home: URL) -> SyncConfig? {
+        let url = syncBackupURL(home: home)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? decoder.decode(SyncConfig.self, from: data)
+    }
+
+    /// Mirror the sync section to the backup (or remove it when sync is cleared,
+    /// so a deliberate disable isn't silently resurrected).
+    private func writeSyncBackup(_ sync: SyncConfig?, home: URL) {
+        let url = syncBackupURL(home: home)
+        guard let sync, !sync.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            try? fileManager.removeItem(at: url)
+            return
+        }
+        try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(sync) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 }

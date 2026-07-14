@@ -840,16 +840,24 @@ enum MeterIconRenderer {
         // bar pair when that provider has written session logs in the last 2 min.
         let codex  = snapshot.providers.first { $0.provider == .codex }
         let claude = snapshot.providers.first { $0.provider == .claude }
-        let dotY: CGFloat = 0.5
-        let dotR: CGFloat = 1.0
+        let dotY: CGFloat = 0.4
+        let dotR: CGFloat = 1.25
         // Codex bars are at indices 0 and 1; Claude at 2 and 3.
         for (isActive, barIndex) in [(codex?.isActive == true, 0), (claude?.isActive == true, 2)] {
             guard isActive else { continue }
             let x0 = 2 + CGFloat(barIndex) * (barWidth + gap)
             let x1 = 2 + CGFloat(barIndex + 1) * (barWidth + gap) + barWidth
             let cx  = (x0 + x1) / 2
-            NSColor.white.withAlphaComponent(0.95).setFill()
-            NSBezierPath(ovalIn: NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)).fill()
+            let dotRect = NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)
+            let dot = NSBezierPath(ovalIn: dotRect)
+            // White fill with a dark outline so the dot stays visible on ANY
+            // menu-bar background — light, dark, or a live/changing wallpaper —
+            // without the app needing to sample the pixels behind it.
+            NSColor.white.setFill()
+            dot.fill()
+            NSColor.black.withAlphaComponent(0.7).setStroke()
+            dot.lineWidth = 0.75
+            dot.stroke()
         }
 
         image.unlockFocus()
