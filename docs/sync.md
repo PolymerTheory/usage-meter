@@ -102,11 +102,101 @@ export default {
 };
 ```
 
-**If you'd rather use Supabase** (which you may already have): deploy an Edge
-Function that stores one row keyed by the URL path and returns it, echoing the
-same rules — `GET` returns the JSON, `PUT` stores the body, `Authorization:
-Bearer <token>` is required, and the CORS headers above are sent. Any backend
-that behaves this way works; the app only speaks plain GET/PUT.
+---
+
+## Step 1 (alternative) — Use Supabase instead
+
+If you already have Supabase, it's a great fit: unlike Cloudflare KV's
+1,000-writes/day cap, Supabase has no per-operation daily limit. You'll make one
+small table and one "Edge Function" (a script Supabase runs), both from the
+dashboard — no command line.
+
+> As with Cloudflare, button names shift over time; look for the closest match.
+
+### 1a. Create the table
+1. Open your project at **https://supabase.com/dashboard**.
+2. Left sidebar → **SQL Editor** → **New query**.
+3. Paste this and click **Run**:
+
+```sql
+create table if not exists usage_sync (
+  key text primary key,
+  blob jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table usage_sync enable row level security;
+-- No policies added on purpose: this blocks direct public access. Only the
+-- Edge Function (which uses the service role) can read/write it.
+```
+
+### 1b. Create the Edge Function
+4. Left sidebar → **Edge Functions** → **Create a function** →
+   **Via Editor** (create/edit in the browser).
+5. Name it `usage-sync`.
+6. **Turn OFF "Verify JWT"** for this function. ⚠️ This is the one easy-to-miss
+   step — the app authenticates with *its own* token, not a Supabase login, so
+   if JWT verification is left on, every request is rejected before your code
+   runs. (The toggle is on the create screen, or later under the function's
+   **Details/Settings**.)
+7. Select all the placeholder code, delete it, and paste the function below.
+8. Change `PUT-A-LONG-RANDOM-PASSWORD-HERE` to a long random password you invent
+   (that's your *Token* — keep a copy).
+9. Click **Deploy**.
+
+```ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const TOKEN = "PUT-A-LONG-RANDOM-PASSWORD-HERE"; // <-- change this (step 8)
+
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, // auto-provided; bypasses RLS
+);
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
+  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+};
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: cors });
+  if ((req.headers.get("Authorization") || "") !== "Bearer " + TOKEN)
+    return new Response("unauthorized", { status: 401, headers: cors });
+
+  const key = new URL(req.url).pathname; // the per-user path is the storage key
+
+  if (req.method === "PUT") {
+    const body = await req.text();
+    if (body.length > 8192) return new Response("too large", { status: 413, headers: cors });
+    const { error } = await supabase
+      .from("usage_sync")
+      .upsert({ key, blob: JSON.parse(body), updated_at: new Date().toISOString() });
+    if (error) return new Response(error.message, { status: 500, headers: cors });
+    return new Response("ok", { headers: cors });
+  }
+
+  if (req.method === "GET") {
+    const { data } = await supabase
+      .from("usage_sync").select("blob").eq("key", key).maybeSingle();
+    return new Response(JSON.stringify(data?.blob ?? {}), {
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  }
+
+  return new Response("method not allowed", { status: 405, headers: cors });
+});
+```
+
+### 1c. Get your two values
+10. Your function's base URL is
+    `https://YOUR-PROJECT-REF.supabase.co/functions/v1/usage-sync`.
+    (Find `YOUR-PROJECT-REF` in **Project Settings → Data API / API → Project
+    URL**, or it's the subdomain of your project's URL.)
+11. Your **Sync URL** = that base URL + `/` + a secret word you invent, e.g.
+    `https://YOUR-PROJECT-REF.supabase.co/functions/v1/usage-sync/kf9x2q7m`.
+    Use the **same** one on every device.
+12. Your **Token** = the password you set in step 8.
 
 ---
 
