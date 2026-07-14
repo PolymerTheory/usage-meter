@@ -32,6 +32,10 @@ public final class UsageMonitor: @unchecked Sendable {
 
     /// Shared data older than this is still shown but flagged stale.
     private static let syncDisplayStaleAfter: TimeInterval = 5 * 60
+    /// Even when nothing changed, refresh the shared blob at most this often so
+    /// the phone view can tell "alive but stable" from "device went offline".
+    /// Kept well above the poll interval to respect KV's 1,000 writes/day limit.
+    private static let syncHeartbeat: TimeInterval = 30 * 60
 
     /// Local log activity remains a fallback when Claude hooks are not installed.
     private static let activityWindow: TimeInterval = 30
@@ -114,16 +118,40 @@ public final class UsageMonitor: @unchecked Sendable {
         let displayCodex = merged(codex, "codex", .codex)
         let displayClaude = merged(claude, "claude", .claude)
 
-        // Publish only providers we fetched live, preserving other devices'
-        // contributions for the ones we couldn't.
+        // Build the blob to publish, preserving other devices' contributions
+        // for providers we couldn't fetch live.
         var providers = shared?.providers ?? [:]
         if isLive(codex) { providers["codex"] = SharedProvider(codex, at: now, by: host) }
         if isLive(claude) { providers["claude"] = SharedProvider(claude, at: now, by: host) }
+
+        // Only WRITE when the data actually changed, or on a periodic heartbeat.
+        // Cloudflare KV's free tier allows just 1,000 writes/day; an
+        // unconditional write every poll is ~720/device/day and blows past it.
+        // Comparing against the just-read shared blob also coordinates devices —
+        // a second device that sees the first's write finds nothing changed and
+        // skips, so total writes don't scale with the number of devices.
         if !providers.isEmpty {
-            syncClient.publish(SharedUsage(updatedAt: now, updatedBy: host, providers: providers), config: sync)
+            let changed = Self.providersDiffer(providers, shared?.providers ?? [:])
+            let heartbeatDue = shared.map { now.timeIntervalSince($0.updatedAt) > Self.syncHeartbeat } ?? true
+            if changed || heartbeatDue {
+                syncClient.publish(SharedUsage(updatedAt: now, updatedBy: host, providers: providers), config: sync)
+            }
         }
 
         return UsageSnapshot(providers: [displayCodex, displayClaude], generatedAt: now)
+    }
+
+    /// Compare the meaningful usage fields (ignoring the updatedAt/updatedBy
+    /// bookkeeping, which always changes) to decide whether a write is warranted.
+    private static func providersDiffer(_ a: [String: SharedProvider], _ b: [String: SharedProvider]) -> Bool {
+        guard Set(a.keys) == Set(b.keys) else { return true }
+        for (key, av) in a {
+            guard let bv = b[key] else { return true }
+            if av.short != bv.short || av.long != bv.long || av.detail != bv.detail || av.source != bv.source {
+                return true
+            }
+        }
+        return false
     }
 
     /// A provider reading is "live" when it has real data that isn't stale — i.e.

@@ -152,6 +152,16 @@ Sync URL, add the header `Authorization: Bearer <token>`, and render
 
 ---
 
+## Free-tier usage
+
+Cloudflare KV's free tier allows **1,000 writes/day** (and 100,000 reads/day).
+UsageMeter only **writes when your usage figures actually change**, plus a
+"still alive" heartbeat every ~30 minutes — so a couple of devices generate
+well under a hundred writes a day, not one per poll. Reads happen every poll
+but have huge headroom. If you ever do exceed a daily limit, KV just returns
+errors until it resets at 00:00 UTC and the app quietly falls back to local
+data — nothing breaks and you are not charged.
+
 ## Security notes
 
 - Stored data is **usage percentages only** — no tokens ever leave your machine.
