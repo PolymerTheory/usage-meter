@@ -518,6 +518,17 @@ struct SyncSettingsView: View {
                 .font(.caption.monospaced())
             }
 
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Reduce cross-device polling", isOn: Binding(
+                    get: { model.syncConfig.coordinate },
+                    set: { model.syncConfig.coordinate = $0; model.syncSaved = false }
+                ))
+                .toggleStyle(.switch)
+                Text("With 2+ devices, only one polls Claude/Codex per interval and the others reuse the shared reading. Best with a write-tolerant backend like Supabase.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 10) {
                 Button("Save", action: model.saveSyncConfig)
                     .keyboardShortcut(.defaultAction)

@@ -389,7 +389,17 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertTrue(sync.isActive)
         XCTAssertEqual(sync.url, "https://ex.com/u/KEY")
         XCTAssertEqual(sync.token, "secret")
-        XCTAssertEqual(sync.freshnessSeconds, 90, "missing field falls back to default")
+        XCTAssertEqual(sync.freshnessSeconds, 150, "missing field falls back to default")
+        XCTAssertFalse(sync.coordinate, "coordination is off unless set")
+    }
+
+    func testConfigLoaderReadsCoordinateFlag() throws {
+        let root = try temporaryLogRoot()
+        try #"{"sync":{"enabled":true,"url":"https://ex.com/u/K","coordinate":true,"freshnessSeconds":200}}"#
+            .write(to: root.appendingPathComponent(".usage-meter.json"), atomically: true, encoding: .utf8)
+        let sync = try XCTUnwrap(UsageConfigLoader().load(home: root).sync)
+        XCTAssertTrue(sync.coordinate)
+        XCTAssertEqual(sync.freshnessSeconds, 200)
     }
 
     func testConfigLoaderDefaultsSyncToNil() throws {

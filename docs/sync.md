@@ -4,114 +4,29 @@ By default UsageMeter runs entirely on your machine and talks to nothing but the
 Claude/Codex usage APIs. **Sync is opt-in.** When you turn it on, each install
 publishes its usage to a small endpoint **you** control, so that:
 
-- your other computers show the same numbers, and
-- a **phone view** can display your usage from anywhere.
+- your other computers show the same numbers,
+- a **phone view** can display your usage from anywhere, and
+- optionally, only **one** device polls the provider APIs per interval (the
+  others reuse the shared reading — see [Reduce cross-device polling](#reduce-cross-device-polling)).
 
 Only usage **percentages and reset times** are stored — never tokens or
 credentials. UsageMeter ships **no default server**; you point it at your own.
 
 There are three steps: **(1)** create a free endpoint, **(2)** turn on sync in
 the app, **(3)** add the phone view. Step 1 is the only fiddly part, and it's
-walked through click-by-click below.
+walked through click-by-click below — with **Supabase** first (recommended) and
+**Cloudflare** as an alternative.
 
 ---
 
-## Step 1 — Create a free endpoint with Cloudflare (≈10 min, no coding)
+## Step 1 — Create a free endpoint with Supabase (recommended)
 
-You'll make a tiny "Worker" (a script Cloudflare runs for you) plus a "KV"
-store (where it saves your usage). It's free and you don't need a website or
-domain.
+You'll make one small table and one "Edge Function" (a script Supabase runs),
+both from the dashboard — no command line. Supabase has **no per-day write
+limit**, so it comfortably handles frequent updates (including the coordination
+feature below).
 
-> Cloudflare occasionally renames buttons. If a label below doesn't match
-> exactly, look for the closest equivalent — the flow is the same.
-
-### 1a. Sign up
-1. Go to **https://dash.cloudflare.com/sign-up** and create a free account,
-   then log in.
-2. If it pushes you to "add a website/domain", look for **Skip** / a small
-   "continue to dashboard" link. You do **not** need a domain for this.
-
-### 1b. Make the storage (KV namespace)
-3. In the left sidebar, open **Storage & Databases → KV**.
-   (On some accounts it's **Workers & Pages**, then the **KV** tab.)
-4. Click **Create a namespace** (or **Create instance**).
-5. In **Namespace name**, type `usage` and click **Add** / **Create**.
-   You now have an empty box to store data in.
-
-### 1c. Make the Worker (the script)
-6. Left sidebar → **Workers & Pages** → click **Create** (or
-   **Create application**) → **Create Worker**.
-   (If it's your first Worker it may ask you to pick a free
-   `*.workers.dev` subdomain — choose anything and continue.)
-7. Change the suggested name to `usage-sync`, then click **Deploy**.
-   (This deploys a placeholder "Hello World" — that's expected.)
-8. Click **Edit code** (a `</>` button, top right). In the editor, **select all
-   and delete**, then paste the whole script from the box further down.
-9. In the pasted code, change the first line — replace
-   `PUT-A-LONG-RANDOM-PASSWORD-HERE` with a long random password you invent
-   (20+ characters, letters and numbers). **Keep a copy of it** — that's your
-   *Token*.
-10. Click **Deploy** (top right of the editor).
-
-### 1d. Connect the storage to the Worker
-11. Go back to the Worker's page → **Settings** tab → find **Bindings**
-    (older UI: **Variables** → **KV Namespace Bindings**).
-12. Click **Add binding** → choose **KV namespace**.
-    - **Variable name:** type exactly `USAGE` (capitals).
-    - **KV namespace:** pick the `usage` one you made in step 5.
-    - Click **Save** / **Deploy**.
-
-### 1e. Write down your two values
-13. On the Worker's page, copy its URL — it looks like
-    `https://usage-sync.YOUR-NAME.workers.dev`.
-14. Your **Sync URL** is that URL plus `/` plus a secret word you invent, e.g.
-    `https://usage-sync.YOUR-NAME.workers.dev/kf9x2q7m`.
-    Use the **same** Sync URL on every device.
-15. Your **Token** is the password you set in step 9.
-
-### The script to paste (step 8)
-
-```js
-const TOKEN = "PUT-A-LONG-RANDOM-PASSWORD-HERE"; // <-- change this (step 9)
-
-export default {
-  async fetch(req, env) {
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization,Content-Type",
-    };
-    if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-
-    if ((req.headers.get("Authorization") || "") !== "Bearer " + TOKEN)
-      return new Response("unauthorized", { status: 401, headers: cors });
-
-    const key = "u:" + new URL(req.url).pathname;
-    if (req.method === "PUT") {
-      const body = await req.text();
-      if (body.length > 8192) return new Response("too large", { status: 413, headers: cors });
-      await env.USAGE.put(key, body, { expirationTtl: 86400 }); // auto-expire idle data after 1 day
-      return new Response("ok", { headers: cors });
-    }
-    if (req.method === "GET") {
-      const val = (await env.USAGE.get(key)) || "{}";
-      return new Response(val, { headers: { ...cors, "Content-Type": "application/json" } });
-    }
-    return new Response("method not allowed", { status: 405, headers: cors });
-  },
-};
-```
-
----
-
-## Step 1 (alternative) — Use Supabase instead
-
-If you already have Supabase, it's a great fit: unlike Cloudflare KV's
-1,000-writes/day cap, Supabase has no per-operation daily limit. You'll make one
-small table and one "Edge Function" (a script Supabase runs), both from the
-dashboard — no command line.
-
-> As with Cloudflare, button names shift over time; look for the closest match.
+> Button names shift over time; look for the closest match if something differs.
 
 ### 1a. Create the table
 1. Open your project at **https://supabase.com/dashboard**.
@@ -188,7 +103,7 @@ Deno.serve(async (req) => {
 });
 ```
 
-### 1c. Get your two values
+### 1c. Write down your two values
 10. Your function's base URL is
     `https://YOUR-PROJECT-REF.supabase.co/functions/v1/usage-sync`.
     (Find `YOUR-PROJECT-REF` in **Project Settings → Data API / API → Project
@@ -200,14 +115,82 @@ Deno.serve(async (req) => {
 
 ---
 
+## Step 1 (alternative) — Cloudflare Workers + KV
+
+No website or domain needed. Note: Cloudflare KV's free tier caps **writes at
+1,000/day** — fine for normal use (the app writes sparingly), but if you turn on
+[coordination](#reduce-cross-device-polling), Supabase is the better fit.
+
+> Cloudflare occasionally renames buttons; look for the closest equivalent.
+
+### 1a. Sign up
+1. Go to **https://dash.cloudflare.com/sign-up**, create a free account, log in.
+2. If it pushes you to "add a website/domain", find **Skip** / "continue to
+   dashboard". You do **not** need a domain.
+
+### 1b. Make the storage (KV namespace)
+3. Left sidebar → **Storage & Databases → KV** (or **Workers & Pages** → **KV**).
+4. **Create a namespace**, name it `usage`, **Add**.
+
+### 1c. Make the Worker
+5. Left sidebar → **Workers & Pages** → **Create** → **Create Worker**
+   (pick a free `*.workers.dev` subdomain if asked).
+6. Name it `usage-sync`, **Deploy** (deploys a placeholder).
+7. **Edit code** (`</>`), select-all + delete, paste the script below, and change
+   `PUT-A-LONG-RANDOM-PASSWORD-HERE` to a long random password (your *Token*).
+   **Deploy**.
+
+### 1d. Connect the storage
+8. Worker page → **Settings** → **Bindings** (older UI: **Variables → KV
+   Namespace Bindings**) → **Add binding** → **KV namespace**:
+   variable name **`USAGE`** (capitals), namespace `usage`. **Save**.
+
+### 1e. Your two values
+9. **Sync URL** = the Worker URL + `/` + a secret word, e.g.
+   `https://usage-sync.YOUR-NAME.workers.dev/kf9x2q7m`. **Token** = the password.
+
+```js
+const TOKEN = "PUT-A-LONG-RANDOM-PASSWORD-HERE"; // <-- change this
+
+export default {
+  async fetch(req, env) {
+    const cors = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization,Content-Type",
+    };
+    if (req.method === "OPTIONS") return new Response(null, { headers: cors });
+
+    if ((req.headers.get("Authorization") || "") !== "Bearer " + TOKEN)
+      return new Response("unauthorized", { status: 401, headers: cors });
+
+    const key = "u:" + new URL(req.url).pathname;
+    if (req.method === "PUT") {
+      const body = await req.text();
+      if (body.length > 8192) return new Response("too large", { status: 413, headers: cors });
+      await env.USAGE.put(key, body, { expirationTtl: 86400 });
+      return new Response("ok", { headers: cors });
+    }
+    if (req.method === "GET") {
+      const val = (await env.USAGE.get(key)) || "{}";
+      return new Response(val, { headers: { ...cors, "Content-Type": "application/json" } });
+    }
+    return new Response("method not allowed", { status: 405, headers: cors });
+  },
+};
+```
+
+---
+
 ## Step 2 — Turn on sync in the app (each computer)
 
 1. Click the **📡 icon** in the popover.
 2. Turn on **Enable sync**.
-3. Paste your **Sync URL** and **Token** (from steps 14–15).
+3. Paste your **Sync URL** and **Token** from Step 1.
 4. Click **Save**, then **Test connection**. It should say **"✓ Connected"**.
-   - "✕ token rejected" → the Token doesn't match the one in your Worker code.
-   - "✕ couldn't reach" → the Sync URL is wrong, or the Worker isn't deployed.
+   - "✕ token rejected" → the Token doesn't match the one in your function/Worker
+     (on Supabase, also check that **Verify JWT is off**).
+   - "✕ couldn't reach" → the Sync URL is wrong or not deployed.
 5. Repeat on your other computer with the **same** URL and Token.
 
 Both computers now publish to and read from the same place, so they converge
@@ -242,15 +225,41 @@ Sync URL, add the header `Authorization: Bearer <token>`, and render
 
 ---
 
+## Reduce cross-device polling
+
+With sync on, each computer still polls Claude/Codex on its own by default. If
+you run 2+ computers and want to cut that, turn on **Reduce cross-device
+polling** in the 📡 panel (or `"coordinate": true` in the config).
+
+When it's on, a computer that finds a **fresh, complete** reading already in the
+shared store **reuses it and skips its own API calls**. So only one device
+actually polls per interval, and the total provider-poll rate becomes roughly
+**3600 ÷ freshnessSeconds per hour, regardless of how many devices you run**
+(default `freshnessSeconds` is 150, i.e. ~24 polls/hour total). There's no fixed
+"leader": whichever awake device notices the reading has gone stale does the next
+poll, so it keeps working when a laptop sleeps or travels.
+
+The trade-off: reused numbers can be up to `freshnessSeconds` old, and the
+device does one shared-store **write per poll** to refresh the reading — which is
+why this is best on **Supabase** (no daily write cap) rather than Cloudflare KV.
+Tune `freshnessSeconds` in `~/.usage-meter.json` (higher = fewer polls, staler
+numbers).
+
+---
+
 ## Free-tier usage
 
-Cloudflare KV's free tier allows **1,000 writes/day** (and 100,000 reads/day).
-UsageMeter only **writes when your usage figures actually change**, plus a
-"still alive" heartbeat every ~30 minutes — so a couple of devices generate
-well under a hundred writes a day, not one per poll. Reads happen every poll
-but have huge headroom. If you ever do exceed a daily limit, KV just returns
-errors until it resets at 00:00 UTC and the app quietly falls back to local
-data — nothing breaks and you are not charged.
+- **Supabase (free):** no per-operation daily cap; the only limits (500 MB
+  storage, ~5 GB/month egress, pause after 7 days *idle*) are nowhere near
+  relevant for a ~1 KB blob polled a few times a minute.
+- **Cloudflare KV (free):** **1,000 writes/day**, 100,000 reads/day. With
+  coordination **off**, the app writes only when your figures change (plus a
+  ~30-min heartbeat) — well under the cap. With coordination **on** it writes
+  every poll, so prefer Supabase.
+
+If you ever do exceed a limit, the endpoint just returns errors until it resets
+and the app quietly falls back to local data — nothing breaks, and you are not
+charged.
 
 ## Security notes
 
@@ -258,5 +267,7 @@ data — nothing breaks and you are not charged.
 - The Sync URL + Token together are a **bearer capability**: anyone with both can
   read your usage and write to your blob. Use a hard-to-guess word in the URL
   **and** a long random Token, and don't post the QR publicly.
-- The Worker caps body size and auto-expires idle data after a day.
-- If a Token leaks, change it in the Worker code, redeploy, and update the app.
+- The function/Worker caps body size; the Cloudflare one also auto-expires idle
+  data after a day.
+- If a Token leaks, change it in the function/Worker code, redeploy, and update
+  the app.

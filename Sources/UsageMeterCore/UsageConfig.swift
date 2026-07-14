@@ -50,15 +50,29 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var url: String
     public var token: String?
-    /// A blob newer than this many seconds is treated as fresh enough to reuse
-    /// without every device re-fetching from the provider APIs.
+    /// When `coordinate` is on, a shared reading newer than this many seconds is
+    /// reused instead of hitting the provider APIs. Must exceed the poll
+    /// interval or no poll is ever skipped. Also sets the effective total
+    /// provider-poll rate: about 3600/freshnessSeconds per hour, regardless of
+    /// how many devices are running.
     public var freshnessSeconds: Double
+    /// Opt-in cross-device coordination: only one device polls Claude/Codex per
+    /// freshness window; the others reuse the shared reading. Writes the shared
+    /// blob every poll, so it suits a write-tolerant backend (e.g. Supabase).
+    public var coordinate: Bool
 
-    public init(enabled: Bool = false, url: String = "", token: String? = nil, freshnessSeconds: Double = 90) {
+    public init(
+        enabled: Bool = false,
+        url: String = "",
+        token: String? = nil,
+        freshnessSeconds: Double = 150,
+        coordinate: Bool = false
+    ) {
         self.enabled = enabled
         self.url = url
         self.token = token
         self.freshnessSeconds = freshnessSeconds
+        self.coordinate = coordinate
     }
 
     public var isActive: Bool {
@@ -66,7 +80,7 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case enabled, url, token, freshnessSeconds
+        case enabled, url, token, freshnessSeconds, coordinate
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,7 +88,8 @@ public struct SyncConfig: Codable, Equatable, Sendable {
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         self.url = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
         self.token = try c.decodeIfPresent(String.self, forKey: .token)
-        self.freshnessSeconds = try c.decodeIfPresent(Double.self, forKey: .freshnessSeconds) ?? 90
+        self.freshnessSeconds = try c.decodeIfPresent(Double.self, forKey: .freshnessSeconds) ?? 150
+        self.coordinate = try c.decodeIfPresent(Bool.self, forKey: .coordinate) ?? false
     }
 }
 

@@ -48,6 +48,15 @@ public final class UsageMonitor: @unchecked Sendable {
         let codexActive = isCodexActive(codexRoot: codexRoot, now: now)
         let claudeActive = isClaudeActive(claudeLogsRoot: claudeLogsRoot, now: now)
 
+        // Coordination fast-path: if another device polled the provider APIs
+        // recently and published a complete reading, reuse it and skip our own
+        // API calls entirely. This is what keeps the total provider-poll rate
+        // independent of how many devices are running.
+        if let sync = config.sync, sync.isActive, sync.coordinate,
+           let reused = coordinatedReuse(sync: sync, now: now, codexActive: codexActive, claudeActive: claudeActive) {
+            return reused
+        }
+
         let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
         // Prefer the live ChatGPT usage API (exact, current). Fall back to
         // local rate_limit log snapshots (which may be stale) and finally to
@@ -124,21 +133,66 @@ public final class UsageMonitor: @unchecked Sendable {
         if isLive(codex) { providers["codex"] = SharedProvider(codex, at: now, by: host) }
         if isLive(claude) { providers["claude"] = SharedProvider(claude, at: now, by: host) }
 
-        // Only WRITE when the data actually changed, or on a periodic heartbeat.
-        // Cloudflare KV's free tier allows just 1,000 writes/day; an
-        // unconditional write every poll is ~720/device/day and blows past it.
-        // Comparing against the just-read shared blob also coordinates devices —
-        // a second device that sees the first's write finds nothing changed and
-        // skips, so total writes don't scale with the number of devices.
+        // Decide whether to write. With coordination on, we only reach here when
+        // no fresh shared reading was available, so we just polled — refresh the
+        // shared blob (and its lease timestamp) whenever we got live data.
+        // Without coordination, write only on change or a periodic heartbeat, to
+        // respect Cloudflare KV's 1,000 writes/day free tier.
         if !providers.isEmpty {
-            let changed = Self.providersDiffer(providers, shared?.providers ?? [:])
-            let heartbeatDue = shared.map { now.timeIntervalSince($0.updatedAt) > Self.syncHeartbeat } ?? true
-            if changed || heartbeatDue {
+            let haveLive = isLive(codex) || isLive(claude)
+            let shouldWrite: Bool
+            if sync.coordinate {
+                shouldWrite = haveLive
+            } else {
+                let changed = Self.providersDiffer(providers, shared?.providers ?? [:])
+                let heartbeatDue = shared.map { now.timeIntervalSince($0.updatedAt) > Self.syncHeartbeat } ?? true
+                shouldWrite = changed || heartbeatDue
+            }
+            if shouldWrite {
                 syncClient.publish(SharedUsage(updatedAt: now, updatedBy: host, providers: providers), config: sync)
             }
         }
 
         return UsageSnapshot(providers: [displayCodex, displayClaude], generatedAt: now)
+    }
+
+    /// Returns a snapshot built from a fresh, complete shared reading — skipping
+    /// this device's own provider API calls — or nil if we should poll ourselves
+    /// (no blob, stale, incomplete, or endpoint unreachable). Local activity
+    /// flags are still this device's own.
+    private func coordinatedReuse(
+        sync: SyncConfig,
+        now: Date,
+        codexActive: Bool,
+        claudeActive: Bool
+    ) -> UsageSnapshot? {
+        guard let shared = syncClient.read(config: sync),
+              now.timeIntervalSince(shared.updatedAt) < sync.freshnessSeconds,
+              let codex = shared.providers["codex"], codex.isAvailable,
+              let claude = shared.providers["claude"], claude.isAvailable else {
+            return nil
+        }
+        let codexUsage = withActive(
+            codex.toProviderUsage(provider: .codex, now: now, staleAfter: Self.syncDisplayStaleAfter),
+            active: codexActive
+        )
+        let claudeUsage = withActive(
+            claude.toProviderUsage(provider: .claude, now: now, staleAfter: Self.syncDisplayStaleAfter),
+            active: claudeActive
+        )
+        return UsageSnapshot(providers: [codexUsage, claudeUsage], generatedAt: now)
+    }
+
+    private func withActive(_ usage: ProviderUsage, active: Bool) -> ProviderUsage {
+        ProviderUsage(
+            provider: usage.provider,
+            shortWindow: usage.shortWindow,
+            longWindow: usage.longWindow,
+            detail: usage.detail,
+            source: usage.source,
+            lastUpdated: usage.lastUpdated,
+            isActive: active
+        )
     }
 
     /// Compare the meaningful usage fields (ignoring the updatedAt/updatedBy
