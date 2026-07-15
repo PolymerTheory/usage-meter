@@ -9,11 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private let model = UsageViewModel()
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    // Created in applicationDidFinishLaunching, after the one-time preference
+    // migration, so Sparkle reads a clean opt-out default.
+    private var updaterController: SPUStandardUpdaterController!
     /// Global mouse-down monitor installed while the popover is open so that
     /// clicking anywhere outside it dismisses it. (.transient behavior is
     /// unreliable for accessory-policy apps that never become the active app.)
@@ -36,6 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             reason: "Keep AI usage meter current"
         )
 
+        // Auto-update is opt-in. Build 0.2.11 briefly forced it and persisted
+        // SUAutomaticallyUpdate=1; clear that once so the opt-out default applies.
+        // Runs before the updater is created so Sparkle reads clean settings.
+        // A later opt-in the user makes via the toggle is preserved.
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "autoUpdateOptInMigration") {
+            defaults.removeObject(forKey: "SUAutomaticallyUpdate")
+            defaults.removeObject(forKey: "SUEnableAutomaticChecks")
+            defaults.set(true, forKey: "autoUpdateOptInMigration")
+        }
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+        )
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureStatusButton(with: .empty)
 
@@ -47,7 +59,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 model: model,
                 checkForUpdates: { [weak self] in
                     self?.updaterController.checkForUpdates(nil)
-                }
+                },
+                autoUpdate: Binding(
+                    get: { [weak self] in
+                        self?.updaterController.updater.automaticallyDownloadsUpdates ?? false
+                    },
+                    set: { [weak self] on in
+                        // Downloading requires checking, so enable/disable both together.
+                        self?.updaterController.updater.automaticallyChecksForUpdates = on
+                        self?.updaterController.updater.automaticallyDownloadsUpdates = on
+                    }
+                )
             )
         )
 
@@ -404,6 +426,7 @@ final class UsageViewModel: ObservableObject {
 struct UsagePopoverView: View {
     @ObservedObject var model: UsageViewModel
     let checkForUpdates: () -> Void
+    let autoUpdate: Binding<Bool>
     @State private var showingSync = false
 
     static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -462,6 +485,13 @@ struct UsagePopoverView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
+
+            Toggle(isOn: autoUpdate) {
+                Text("Update automatically").font(.caption2).foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("Off by default. When on, UsageMeter checks every few hours and installs updates silently. Otherwise use the ↓ button to update manually.")
         }
     }
 }
