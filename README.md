@@ -105,9 +105,12 @@ launchctl bootout "gui/$(id -u)/io.github.PolymerTheory.UsageMeter"
 rm ~/Library/LaunchAgents/io.github.PolymerTheory.UsageMeter.plist
 ```
 
-UsageMeter checks for updates daily. Use the down-arrow button in the popover
-to check immediately. Sparkle verifies every downloaded update with the
-project's EdDSA signing key before replacing the app.
+UsageMeter checks for updates every few hours and **downloads and installs them
+automatically** in the background, relaunching itself on the new version — no
+prompts. Use the down-arrow button in the popover to check immediately. Sparkle
+verifies every downloaded update with the project's EdDSA signing key before
+replacing the app. (You can turn auto-install off in Terminal with
+`defaults write io.github.PolymerTheory.UsageMeter SUAutomaticallyUpdate -bool NO`.)
 
 ## Configuration (optional)
 
