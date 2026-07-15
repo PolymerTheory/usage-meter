@@ -3,6 +3,15 @@
     <channel>
         <title>UsageMeter</title>
         <item>
+            <title>0.2.11</title>
+            <pubDate>Wed, 15 Jul 2026 16:51:11 +0200</pubDate>
+            <link>https://github.com/PolymerTheory/usage-meter</link>
+            <sparkle:version>211</sparkle:version>
+            <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/PolymerTheory/usage-meter/releases/download/v0.2.11/UsageMeter.zip" length="1750454" type="application/octet-stream" sparkle:edSignature="dro63H/QpHvet9HL1rwDgYFdBPZtgLGLWTIzO4dpDenJfragPUcw49+2wkwvO7XoIg2kVHkTe+Pgxodq+Wf3Cw=="/>
+        </item>
+        <item>
             <title>0.2.10</title>
             <pubDate>Tue, 14 Jul 2026 13:45:31 +0200</pubDate>
             <link>https://github.com/PolymerTheory/usage-meter</link>
@@ -37,15 +46,6 @@
             <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/PolymerTheory/usage-meter/releases/download/v0.2.7/UsageMeter.zip" length="1729332" type="application/octet-stream" sparkle:edSignature="aJxrtu0ZIpRDoxHzTL5k6FGhXwKlMo3sZ5wrpGK+NnD4H2um5PY4c9aQBbQPusZY8Gf/O1kiozTd4irJsaAoBQ=="/>
-        </item>
-        <item>
-            <title>0.2.6</title>
-            <pubDate>Mon, 13 Jul 2026 17:29:32 +0200</pubDate>
-            <link>https://github.com/PolymerTheory/usage-meter</link>
-            <sparkle:version>206</sparkle:version>
-            <sparkle:shortVersionString>0.2.6</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/PolymerTheory/usage-meter/releases/download/v0.2.6/UsageMeter.zip" length="1723333" type="application/octet-stream" sparkle:edSignature="2/o2qLlp7Bw/ii56AElwFgMVMj4Hg/JiVpExaYTizftvGWp7MWGKdSiPl4grvXqRPDd1wQLX8TfOemVz75qECg=="/>
         </item>
     </channel>
 </rss>
