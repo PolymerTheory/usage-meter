@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Usage Widget</string>
+    <string name="widget_label">AI Usage</string>
+    <string name="widget_description">Claude &amp; Codex quota at a glance, from your UsageMeter sync endpoint.</string>
+
+    <string name="config_title">Usage Widget setup</string>
+    <string name="config_intro">Point this at the same sync endpoint your Mac UsageMeter publishes to. The easiest way is to scan the QR code shown in UsageMeter’s sync (📡) panel.</string>
+    <string name="scan_qr">Scan QR from UsageMeter</string>
+    <string name="or_paste">…or paste the sync details manually</string>
+    <string name="sync_url_hint">Sync URL</string>
+    <string name="token_hint">Token</string>
+    <string name="paste_link_hint">…or paste the whole QR link (https://…#u=…&amp;t=…)</string>
+    <string name="test_connection">Test connection</string>
+    <string name="save">Save</string>
+    <string name="testing">Testing…</string>
+    <string name="connected">✓ Connected</string>
+    <string name="saved">Saved. Add the “AI Usage” widget to your home screen.</string>
+    <string name="not_configured">Not configured yet — scan the QR or paste your sync URL.</string>
+    <string name="camera_permission_needed">Camera permission is needed to scan the QR code.</string>
+    <string name="scan_prompt">Point at the QR code in UsageMeter’s sync panel</string>
+    <string name="appearance">Appearance</string>
+    <string name="icon_style_title">Compact icon style</string>
+    <string name="icon_style_summary">Show a small app-icon–sized glyph that blends into your icon grid, instead of the full detailed card.</string>
+</resources>

@@ -218,9 +218,15 @@ endpoint.
 
 ### Want a real home-screen widget instead of a page?
 
-A live Android widget needs a third-party widget app (nothing to install from
-here): point **HTTP Shortcuts** or **KWGT** (with an HTTP/JSON source) at your
-Sync URL, add the header `Authorization: Bearer <token>`, and render
+**On Android**, use the companion **[Usage Widget](../android/)** app in this
+repo. Install its APK, tap **Scan QR** and point it at the same sync QR code,
+and drop the resizable "AI Usage" widget on your home screen — the same four-bar
+glyph as the Mac menu bar. It reads your endpoint directly (quota only, no
+credentials). See [`android/README.md`](../android/README.md) to build/install.
+
+Prefer not to install anything, or on another platform? Any generic HTTP widget
+app works too: point **HTTP Shortcuts** or **KWGT** (with an HTTP/JSON source) at
+your Sync URL, add the header `Authorization: Bearer <token>`, and render
 `providers.codex` / `providers.claude`.
 
 ---

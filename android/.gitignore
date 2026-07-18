@@ -1,0 +1,19 @@
+# Android / Gradle build artifacts — never committed. The APK ships via GitHub Releases.
+.gradle/
+build/
+/local.properties
+/captures
+
+# Build outputs
+*.apk
+*.aab
+
+# Signing — keys and passwords must never be committed.
+*.keystore
+*.jks
+keystore.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store

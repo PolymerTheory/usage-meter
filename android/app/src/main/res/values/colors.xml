@@ -1,0 +1,12 @@
+<resources>
+    <!-- Palette mirrors docs/phone.html so the widget matches the Mac menu-bar look. -->
+    <color name="bg">#FF0B0F14</color>
+    <color name="card">#FF151B23</color>
+    <color name="text">#FFE7EDF3</color>
+    <color name="muted">#FF8B97A5</color>
+    <color name="track">#FF263140</color>
+    <color name="green">#FF34C759</color>
+    <color name="yellow">#FFFFCC00</color>
+    <color name="red">#FFFF3B30</color>
+    <color name="gray">#FF5B6673</color>
+</resources>

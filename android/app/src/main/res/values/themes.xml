@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.UsageWidget" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/green</item>
+    </style>
+</resources>
