@@ -307,7 +307,9 @@ enum UsageMeterMain {
         print("launch agent: \(LaunchAgentInstaller.isInstalled(home: home) ? "installed" : "missing")")
 
         let now = Date()
-        let snapshot = UsageMonitor(home: home).snapshot(now: now)
+        let monitor = UsageMonitor(home: home)
+        print("codex account fingerprint: \(monitor.codexAccountFingerprint() ?? "unknown") (compare across your devices — should match)")
+        let snapshot = monitor.snapshot(now: now)
         for provider in snapshot.providers {
             let availability = provider.isUnavailable ? "unavailable" : "available"
             print("\(provider.provider.rawValue.lowercased()) usage: \(availability)")

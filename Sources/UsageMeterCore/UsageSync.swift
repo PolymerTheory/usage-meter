@@ -26,19 +26,48 @@ public struct SharedProvider: Codable, Equatable, Sendable {
     public var long: SharedWindow
     public var detail: String
     public var source: String
+    /// Short, non-reversible fingerprint of the account/workspace this reading
+    /// belongs to. Lets a device avoid trusting a reading from a different
+    /// account (or workspace) than its own. Absent on blobs from older builds.
+    public var account: String?
 
-    public init(updatedAt: Date, updatedBy: String, short: SharedWindow, long: SharedWindow, detail: String, source: String) {
+    public init(updatedAt: Date, updatedBy: String, short: SharedWindow, long: SharedWindow, detail: String, source: String, account: String? = nil) {
         self.updatedAt = updatedAt
         self.updatedBy = updatedBy
         self.short = short
         self.long = long
         self.detail = detail
         self.source = source
+        self.account = account
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt, updatedBy, short, long, detail, source, account
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.updatedBy = try c.decode(String.self, forKey: .updatedBy)
+        self.short = try c.decode(SharedWindow.self, forKey: .short)
+        self.long = try c.decode(SharedWindow.self, forKey: .long)
+        self.detail = try c.decode(String.self, forKey: .detail)
+        self.source = try c.decode(String.self, forKey: .source)
+        self.account = try c.decodeIfPresent(String.self, forKey: .account)
     }
 
     /// True when at least one window carries a real percentage.
     public var isAvailable: Bool {
         short.percent != nil || long.percent != nil
+    }
+
+    /// Whether this reading may be trusted for a device whose account is
+    /// `mine`. When our own account is unknown we don't block; when it's known,
+    /// the reading must carry a matching fingerprint (so an untagged reading
+    /// from an older build, or one from a different account, is not reused).
+    public func accountMatches(_ mine: String?) -> Bool {
+        guard let mine else { return true }
+        return account == mine
     }
 }
 

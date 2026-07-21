@@ -393,6 +393,28 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertFalse(sync.coordinate, "coordination is off unless set")
     }
 
+    func testSharedProviderAccountMatching() throws {
+        func provider(account: String?) -> SharedProvider {
+            SharedProvider(
+                updatedAt: iso("2026-06-02T12:00:00.000Z"), updatedBy: "box",
+                short: SharedWindow(label: "5h", percent: nil, resetAt: nil),
+                long: SharedWindow(label: "7d", percent: 50, resetAt: nil),
+                detail: "d", source: "s", account: account
+            )
+        }
+        // Unknown local account → don't block (backward compatible).
+        XCTAssertTrue(provider(account: "abc").accountMatches(nil))
+        // Matching fingerprints → trusted.
+        XCTAssertTrue(provider(account: "abc").accountMatches("abc"))
+        // Different account (e.g. another workspace) → not trusted.
+        XCTAssertFalse(provider(account: "xyz").accountMatches("abc"))
+        // Untagged reading from an older build, but we know our account → not trusted.
+        XCTAssertFalse(provider(account: nil).accountMatches("abc"))
+        // Round-trips through JSON with the account field.
+        let data = try SyncClient.encoder.encode(provider(account: "abc"))
+        XCTAssertEqual(try SyncClient.decoder.decode(SharedProvider.self, from: data).account, "abc")
+    }
+
     func testSyncCredentialsRestoredFromBackupWhenMainFileLost() throws {
         let root = try temporaryLogRoot()
         let loader = UsageConfigLoader()

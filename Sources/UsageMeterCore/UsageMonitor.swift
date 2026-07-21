@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public final class UsageMonitor: @unchecked Sendable {
     private let reader: LogUsageReader
@@ -114,23 +115,31 @@ public final class UsageMonitor: @unchecked Sendable {
     ) -> UsageSnapshot {
         let shared = syncClient.read(config: sync)
         let host = Self.deviceName()
+        let codexAccount = codexAccountFingerprint()
 
-        func merged(_ local: ProviderUsage, _ key: String, _ provider: UsageProvider) -> ProviderUsage {
-            // Use shared data only when our own reading isn't usable.
+        func merged(_ local: ProviderUsage, _ key: String, _ provider: UsageProvider, account: String?) -> ProviderUsage {
+            // Use shared data only when our own reading isn't usable AND the
+            // shared reading belongs to the same account as ours.
             guard !isLive(local),
-                  let remote = shared?.providers[key], remote.isAvailable else {
+                  let remote = shared?.providers[key], remote.isAvailable,
+                  remote.accountMatches(account) else {
                 return local
             }
             return remote.toProviderUsage(provider: provider, now: now, staleAfter: Self.syncDisplayStaleAfter)
         }
 
-        let displayCodex = merged(codex, "codex", .codex)
-        let displayClaude = merged(claude, "claude", .claude)
+        let displayCodex = merged(codex, "codex", .codex, account: codexAccount)
+        let displayClaude = merged(claude, "claude", .claude, account: nil)
 
         // Build the blob to publish, preserving other devices' contributions
-        // for providers we couldn't fetch live.
+        // for providers we couldn't fetch live. Stamp Codex with our account
+        // fingerprint so other devices can tell whose reading it is.
         var providers = shared?.providers ?? [:]
-        if isLive(codex) { providers["codex"] = SharedProvider(codex, at: now, by: host) }
+        if isLive(codex) {
+            var sp = SharedProvider(codex, at: now, by: host)
+            sp.account = codexAccount
+            providers["codex"] = sp
+        }
         if isLive(claude) { providers["claude"] = SharedProvider(claude, at: now, by: host) }
 
         // Decide whether to write. With coordination on, we only reach here when
@@ -169,6 +178,7 @@ public final class UsageMonitor: @unchecked Sendable {
         guard let shared = syncClient.read(config: sync),
               now.timeIntervalSince(shared.updatedAt) < sync.freshnessSeconds,
               let codex = shared.providers["codex"], codex.isAvailable,
+              codex.accountMatches(codexAccountFingerprint()),
               let claude = shared.providers["claude"], claude.isAvailable else {
             return nil
         }
@@ -193,6 +203,26 @@ public final class UsageMonitor: @unchecked Sendable {
             lastUpdated: usage.lastUpdated,
             isActive: active
         )
+    }
+
+    /// Short, non-reversible fingerprint of this machine's Codex account (the
+    /// account_id in ~/.codex/auth.json, which differs per workspace). Used so a
+    /// device won't display or reuse a shared Codex reading from a different
+    /// account/workspace. Exposed for diagnostics.
+    public func codexAccountFingerprint() -> String? {
+        let url = home.appendingPathComponent(".codex/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = json["tokens"] as? [String: Any],
+              let account = tokens["account_id"] as? String,
+              !account.isEmpty else {
+            return nil
+        }
+        return Self.fingerprint(account)
+    }
+
+    static func fingerprint(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Compare the meaningful usage fields (ignoring the updatedAt/updatedBy
