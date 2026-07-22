@@ -41,7 +41,10 @@ public final class UsageMonitor: @unchecked Sendable {
     /// Local log activity remains a fallback when Claude hooks are not installed.
     private static let activityWindow: TimeInterval = 30
 
-    public func snapshot(now: Date = Date()) -> UsageSnapshot {
+    /// - Parameter force: for a user-initiated refresh. Skips the coordination
+    ///   fast-path and the readers' short-lived caches so the call really goes
+    ///   to the provider APIs and the timestamp actually moves.
+    public func snapshot(now: Date = Date(), force: Bool = false) -> UsageSnapshot {
         let config = configLoader.load(home: home)
         let codexRoot = home.appendingPathComponent(".codex/sessions")
         let claudeLogsRoot = home.appendingPathComponent(".claude/projects")
@@ -52,8 +55,9 @@ public final class UsageMonitor: @unchecked Sendable {
         // Coordination fast-path: if another device polled the provider APIs
         // recently and published a complete reading, reuse it and skip our own
         // API calls entirely. This is what keeps the total provider-poll rate
-        // independent of how many devices are running.
-        if let sync = config.sync, sync.isActive, sync.coordinate,
+        // independent of how many devices are running. A forced refresh always
+        // polls, so the button does something visible.
+        if !force, let sync = config.sync, sync.isActive, sync.coordinate,
            let reused = coordinatedReuse(sync: sync, now: now, codexActive: codexActive, claudeActive: claudeActive) {
             return reused
         }
@@ -85,7 +89,7 @@ public final class UsageMonitor: @unchecked Sendable {
             isActive: codexActive
         )
 
-        let claudeResult = claudeAPIReader.readUsage(home: home, now: now)
+        let claudeResult = claudeAPIReader.readUsage(home: home, now: now, force: force)
         var claudeUsage = claudeResult.usage
             ?? unavailableClaudeUsage(reason: claudeResult.failureReason, now: now)
         claudeUsage = ProviderUsage(

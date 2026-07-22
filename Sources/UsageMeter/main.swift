@@ -319,6 +319,17 @@ enum UsageMeterMain {
             printWindow("short", provider.shortWindow, now: now)
             printWindow("long", provider.longWindow, now: now)
         }
+
+        // With coordination on, the displayed values may be another device's
+        // reading. Show what a forced (live) poll returns so the two can be
+        // compared — this is what the popover's refresh button now does.
+        if UsageConfigLoader().load(home: home).sync?.coordinate == true {
+            print("--- forced live poll (what the refresh button fetches) ---")
+            for provider in monitor.snapshot(now: Date(), force: true).providers {
+                print("\(provider.provider.rawValue.lowercased()): \(provider.detail)")
+                printWindow("  long", provider.longWindow, now: now)
+            }
+        }
     }
 
     private static func printWindow(_ label: String, _ window: UsageWindow, now: Date) {
@@ -338,6 +349,10 @@ final class UsageViewModel: ObservableObject {
     @Published var syncSaved = false
     @Published var syncTestResult: String?
     @Published var syncTesting = false
+    /// True while a user-initiated refresh is in flight (drives the spinner).
+    @Published private(set) var isRefreshing = false
+    /// Set after a forced refresh that couldn't get live data, so the user sees why.
+    @Published private(set) var refreshStatus: String?
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
     private let configLoader = UsageConfigLoader()
@@ -389,15 +404,42 @@ final class UsageViewModel: ObservableObject {
         claudeHooksInstalled = ClaudeHookInstaller.isInstalled(executablePath: executablePath)
     }
 
-    func refreshQuota() {
+    /// - Parameter force: user-initiated. Bypasses the coordination fast-path and
+    ///   the readers' short caches so it really re-queries, shows a spinner, and
+    ///   reports why if a provider comes back unusable.
+    func refreshQuota(force: Bool = false) {
+        if force {
+            guard !isRefreshing else { return }
+            isRefreshing = true
+            refreshStatus = nil
+        }
         Task {
             let monitor = self.monitor
             let snapshot = await Task.detached(priority: .utility) {
-                monitor.snapshot()
+                monitor.snapshot(force: force)
             }.value
             self.snapshot = snapshot
             self.onSnapshot?(snapshot)
+            if force {
+                self.isRefreshing = false
+                self.refreshStatus = Self.refreshProblem(in: snapshot)
+            }
         }
+    }
+
+    /// A short, human explanation when a forced refresh didn't yield live data
+    /// for some provider — nil when everything came back fresh.
+    private static func refreshProblem(in snapshot: UsageSnapshot) -> String? {
+        for provider in snapshot.providers {
+            let name = provider.provider.rawValue
+            if provider.isUnavailable {
+                return "\(name): \(provider.detail)"
+            }
+            if provider.shortWindow.isStale || provider.longWindow.isStale {
+                return "\(name): couldn't refresh — showing last known. \(provider.detail)"
+            }
+        }
+        return nil
     }
 
     func refreshActivity() {
@@ -464,11 +506,23 @@ struct UsagePopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Check for Updates")
-                Button(action: model.refreshQuota) {
-                    Image(systemName: "arrow.clockwise")
+                Button(action: { model.refreshQuota(force: true) }) {
+                    if model.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh")
+                .disabled(model.isRefreshing)
+                .help("Refresh now (queries the provider APIs directly)")
+            }
+
+            if let status = model.refreshStatus {
+                Text(status)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if !model.claudeHooksInstalled {

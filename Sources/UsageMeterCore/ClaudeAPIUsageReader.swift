@@ -62,10 +62,13 @@ public struct ClaudeAPIUsageReader {
         self.timeout = timeout
     }
 
-    public func readUsage(home: URL, now: Date = Date()) -> ReadResult {
+    /// - Parameter force: set for a user-initiated refresh, which skips the
+    ///   short-lived cache so the call actually goes to the API. The rate-limit
+    ///   backoff is still respected — forcing through a 429 would only extend it.
+    public func readUsage(home: URL, now: Date = Date(), force: Bool = false) -> ReadResult {
         // Serve a very recent cached response as current instead of calling the
         // live API again, so bursts of snapshot() calls don't hammer the endpoint.
-        if let fresh = freshCachedUsage(home: home, now: now, maxAge: Self.minLiveInterval) {
+        if !force, let fresh = freshCachedUsage(home: home, now: now, maxAge: Self.minLiveInterval) {
             return fresh
         }
 
