@@ -340,6 +340,55 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.resetDate, isoPlain("2026-06-09T10:00:00Z"))
     }
 
+    /// A blob whose top-level timestamp is fresh (because Codex keeps
+    /// republishing) must not be reused when the Claude entry inside it has
+    /// gone stale — otherwise every device skips its Claude poll indefinitely
+    /// and the shared Claude reading ages without bound.
+    func testCoordinationRejectsBlobWithStaleClaudeDespiteFreshBlobTimestamp() throws {
+        let now = iso("2026-06-02T12:00:00.000Z")
+        func provider(_ at: Date, percent: Double?, account: String? = nil) -> SharedProvider {
+            var p = SharedProvider(
+                updatedAt: at,
+                updatedBy: "WorkLaptop",
+                short: SharedWindow(label: "5h", percent: percent, resetAt: nil),
+                long: SharedWindow(label: "7d", percent: percent, resetAt: nil),
+                detail: "snapshot",
+                source: "api"
+            )
+            p.account = account
+            return p
+        }
+
+        let staleClaude = SharedUsage(
+            updatedAt: now,  // fresh: Codex republished a moment ago
+            updatedBy: "WorkLaptop",
+            providers: [
+                "codex": provider(now.addingTimeInterval(-10), percent: 45, account: "abc123"),
+                "claude": provider(now.addingTimeInterval(-11 * 60), percent: 53),
+            ]
+        )
+        XCTAssertFalse(UsageMonitor.isReusable(
+            staleClaude, now: now, freshnessSeconds: 150, codexAccount: "abc123"
+        ))
+
+        let bothFresh = SharedUsage(
+            updatedAt: now,
+            updatedBy: "WorkLaptop",
+            providers: [
+                "codex": provider(now.addingTimeInterval(-10), percent: 45, account: "abc123"),
+                "claude": provider(now.addingTimeInterval(-20), percent: 53),
+            ]
+        )
+        XCTAssertTrue(UsageMonitor.isReusable(
+            bothFresh, now: now, freshnessSeconds: 150, codexAccount: "abc123"
+        ))
+
+        // A reading from a different account is still refused.
+        XCTAssertFalse(UsageMonitor.isReusable(
+            bothFresh, now: now, freshnessSeconds: 150, codexAccount: "different"
+        ))
+    }
+
     func testSharedUsageRoundTripsThroughJSON() throws {
         let blob = SharedUsage(
             updatedAt: iso("2026-06-02T12:00:00.000Z"),

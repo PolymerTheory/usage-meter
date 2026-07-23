@@ -173,17 +173,50 @@ public final class UsageMonitor: @unchecked Sendable {
     /// this device's own provider API calls — or nil if we should poll ourselves
     /// (no blob, stale, incomplete, or endpoint unreachable). Local activity
     /// flags are still this device's own.
+    /// Whether a shared blob is complete and current enough for a device to
+    /// display instead of polling the provider APIs itself.
+    ///
+    /// Freshness is judged **per provider**, never on the blob's own timestamp:
+    /// the blob is restamped whenever *any* provider is published, so a live
+    /// Codex keeps it looking current while the Claude entry inside quietly
+    /// ages. Trusting the blob timestamp meant every device skipped its Claude
+    /// poll forever once Claude fell behind even once, and the entry aged
+    /// without bound instead of recovering.
+    static func isReusable(
+        _ shared: SharedUsage,
+        now: Date,
+        freshnessSeconds: TimeInterval,
+        codexAccount: String?
+    ) -> Bool {
+        func fresh(_ provider: SharedProvider?) -> Bool {
+            guard let provider, provider.isAvailable else { return false }
+            return now.timeIntervalSince(provider.updatedAt) < freshnessSeconds
+        }
+        guard let codex = shared.providers["codex"], fresh(codex),
+              codex.accountMatches(codexAccount),
+              fresh(shared.providers["claude"]) else { return false }
+        return true
+    }
+
     private func coordinatedReuse(
         sync: SyncConfig,
         now: Date,
         codexActive: Bool,
         claudeActive: Bool
     ) -> UsageSnapshot? {
+        // Freshness must be judged **per provider**, not on the blob's own
+        // timestamp. The blob is restamped whenever *any* provider is
+        // published, so a live Codex keeps it looking fresh while the Claude
+        // entry inside quietly ages. Trusting the blob timestamp meant every
+        // device skipped its Claude poll forever once Claude fell behind even
+        // once — the entry then aged without bound instead of recovering.
+        // Requiring both to be individually fresh makes that self-healing: a
+        // stale provider drops us to a real poll, which republishes it.
         guard let shared = syncClient.read(config: sync),
-              now.timeIntervalSince(shared.updatedAt) < sync.freshnessSeconds,
-              let codex = shared.providers["codex"], codex.isAvailable,
-              codex.accountMatches(codexAccountFingerprint()),
-              let claude = shared.providers["claude"], claude.isAvailable else {
+              Self.isReusable(shared, now: now, freshnessSeconds: sync.freshnessSeconds,
+                              codexAccount: codexAccountFingerprint()),
+              let codex = shared.providers["codex"],
+              let claude = shared.providers["claude"] else {
             return nil
         }
         let codexUsage = withActive(

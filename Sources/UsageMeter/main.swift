@@ -309,6 +309,17 @@ enum UsageMeterMain {
         let now = Date()
         let monitor = UsageMonitor(home: home)
         print("codex account fingerprint: \(monitor.codexAccountFingerprint() ?? "unknown") (compare across your devices — should match)")
+        // The un-merged local Claude read. The provider blocks below can show a
+        // *shared* reading from another device, which hides whether this machine
+        // can talk to the API at all — this line answers that directly.
+        let rawClaude = ClaudeAPIUsageReader().readUsage(home: home, now: now, force: true)
+        if let reason = rawClaude.failureReason {
+            print("claude live fetch: FAILED — \(String(describing: reason))")
+        } else if let usage = rawClaude.usage {
+            let pct = usage.longWindow.usedPercent.map { String(format: "%.1f%%", $0) } ?? "n/a"
+            print("claude live fetch: ok (\(usage.longWindow.label) \(pct))")
+        }
+
         let snapshot = monitor.snapshot(now: now)
         for provider in snapshot.providers {
             let availability = provider.isUnavailable ? "unavailable" : "available"

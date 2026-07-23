@@ -86,17 +86,19 @@ public struct ClaudeAPIUsageReader {
         }
 
         if credentials.needsRefresh(now: now, refreshBuffer: Self.refreshBuffer) {
-            switch refreshCredentials(credentials, home: home, now: now) {
-            case let .refreshed(creds):
+            let outcome = refreshCredentials(credentials, home: home, now: now)
+            if case let .refreshed(creds) = outcome {
                 credentials = creds
-            case .expired:
-                // The refresh token is dead — no amount of retrying helps until
-                // the user signs in to Claude Code again. Surface the actionable
-                // message rather than stale numbers that look like real quota.
-                return .failure(.credentialsExpired)
-            case .failed:
-                // Transient refresh failure. Claude Code can leave an access
-                // token usable anyway, so try it before falling back to cache.
+            } else {
+                // Refresh didn't work — either the endpoint rejected us
+                // (`.expired`) or it was unreachable (`.failed`). Neither is
+                // proof that the *access* token is unusable: Claude Code stamps
+                // a conservative expiry and keeps its own token fresh, so the
+                // one we hold is very often still good. Try it before drawing
+                // any conclusion — only the API rejecting it means the user
+                // genuinely has to sign in again. Giving up here instead is
+                // what used to freeze Claude for as long as the refresh
+                // endpoint stayed unhappy.
                 let fallbackResponse = fetchUsage(credentials: credentials)
                 switch fallbackResponse {
                 case let .success(data):
@@ -111,6 +113,13 @@ public struct ClaudeAPIUsageReader {
                     return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                         ?? .failure(.rateLimited)
                 case let .failure(message):
+                    // The token itself was refused and refresh can't fix it:
+                    // this is the one case where re-running `claude login` is
+                    // the actual remedy.
+                    let refreshRejected: Bool = { if case .expired = outcome { return true }; return false }()
+                    if refreshRejected, message.contains("401") || message.contains("403") {
+                        return .failure(.credentialsExpired)
+                    }
                     let detail = hasClaudeDesktopTokenCache(home: home)
                         ? "legacy OAuth token is expired and Claude's modern desktop token cache is unsupported; access token fetch failed: \(message)"
                         : "token refresh unavailable; access token fetch failed: \(message)"
