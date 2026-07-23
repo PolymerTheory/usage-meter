@@ -38,8 +38,10 @@ Other behaviour:
 
 - The widget is resizable both directions; the detailed card also thins to
   bars-only at very small sizes.
-- **Tap:** opens the app, which always shows the full detailed view (percentages,
-  labels, reset times) and refreshes on open — regardless of the widget's style.
+- **Tap:** opens the app, which shows a detailed usage screen — one card per
+  provider with a horizontal bar per window, percentage, reset countdown (e.g.
+  "resets 9:05 (2h 15m)"), and a last-updated footer — laid out like the Mac
+  app's usage panel. Refreshes on open, regardless of the widget's own style.
 - Background refresh runs every 15 min (WorkManager's minimum) when a network is
   available, plus a ~30 min system-update backstop.
 
@@ -118,12 +120,16 @@ android/
   app/src/main/
     java/io/github/polymertheory/usagewidget/
       UsageWidgetProvider.kt   # AppWidgetProvider: sizing, RemoteViews, tap intent
-      WidgetRenderer.kt        # Canvas → bitmap; the four-bar drawing
+      WidgetRenderer.kt        # Canvas → bitmap; the four-bar drawing (widget only)
+      UsageDetailRenderer.kt   # Binds Usage into the in-app provider cards
+      TimeFormat.kt            # Shared "updated Xm ago" / "resets …" formatting
       UsageRepository.kt       # GET the sync endpoint + disk cache
       model/UsageModels.kt     # SharedUsage blob parsing
-      config/ConfigActivity.kt # setup screen (QR scan + manual)
+      config/ConfigActivity.kt # setup screen (QR scan + manual) + detail view
       config/ConfigStore.kt    # prefs + QR pairing-link parsing
       work/RefreshWorker.kt     # WorkManager periodic + one-shot refresh
+    res/layout/view_provider_card.xml     # one provider's card (header/rows/footer)
+    res/layout/view_usage_window_row.xml  # one window's bar + percent + reset row
     res/xml/usage_widget_info.xml  # widget metadata (resizable, sizes)
   app/src/test/...              # off-device data-path tests
 ```

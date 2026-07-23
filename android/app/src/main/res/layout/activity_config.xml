@@ -25,13 +25,19 @@
             android:textAppearance="?attr/textAppearanceBodyMedium"
             android:layout_marginBottom="16dp" />
 
-        <ImageView
-            android:id="@+id/preview"
+        <include
+            android:id="@+id/codex_card"
+            layout="@layout/view_provider_card"
             android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:layout_marginBottom="16dp"
-            android:contentDescription="@string/widget_label"
-            android:scaleType="fitCenter" />
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp" />
+
+        <include
+            android:id="@+id/claude_card"
+            layout="@layout/view_provider_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp" />
 
         <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/icon_style_switch"

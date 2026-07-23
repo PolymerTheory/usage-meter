@@ -107,7 +107,7 @@ object WidgetRenderer {
         if (showUpdated && usage?.updatedAtEpochMs != null) {
             labelPaint.textSize = dp(10f)
             labelPaint.textAlign = Paint.Align.CENTER
-            val ago = agoText(usage.updatedAtEpochMs)
+            val ago = TimeFormat.agoText(usage.updatedAtEpochMs)
             canvas.drawText(ago, w / 2f, bottom, labelPaint)
             bottom -= dp(14f)
         } else if (statusText != null && !compact) {
@@ -262,15 +262,4 @@ object WidgetRenderer {
         }
     }
 
-    private fun agoText(epochMs: Long): String {
-        // Rendered at draw time; approximate but fine for a glanceable widget.
-        val now = System.currentTimeMillis()
-        val s = (now - epochMs) / 1000
-        return when {
-            s < 90 -> "updated just now"
-            s < 3600 -> "updated ${Math.round(s / 60.0)}m ago"
-            s < 86400 -> "updated ${Math.round(s / 3600.0)}h ago"
-            else -> "updated ${Math.round(s / 86400.0)}d ago"
-        }
-    }
 }

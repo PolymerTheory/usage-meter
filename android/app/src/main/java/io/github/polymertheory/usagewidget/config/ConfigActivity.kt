@@ -1,7 +1,6 @@
 package io.github.polymertheory.usagewidget.config
 
 import android.appwidget.AppWidgetManager
-import android.content.res.Configuration
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -11,11 +10,11 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.polymertheory.usagewidget.FetchResult
 import io.github.polymertheory.usagewidget.R
+import io.github.polymertheory.usagewidget.UsageDetailRenderer
 import io.github.polymertheory.usagewidget.UsageRepository
 import io.github.polymertheory.usagewidget.UsageWidgetProvider
-import io.github.polymertheory.usagewidget.WidgetRenderer
-import io.github.polymertheory.usagewidget.WidgetStyle
 import io.github.polymertheory.usagewidget.databinding.ActivityConfigBinding
+import io.github.polymertheory.usagewidget.model.Usage
 import io.github.polymertheory.usagewidget.work.RefreshScheduler
 import kotlinx.coroutines.launch
 
@@ -86,7 +85,7 @@ class ConfigActivity : AppCompatActivity() {
             UsageWidgetProvider.updateAll(this)
         }
 
-        renderPreview()
+        renderUsage()
     }
 
     override fun onResume() {
@@ -96,10 +95,10 @@ class ConfigActivity : AppCompatActivity() {
         lifecycleScope.launch {
             when (val r = UsageRepository.fetch(this@ConfigActivity, cfg)) {
                 is FetchResult.Ok -> {
-                    renderPreview(r.usage)
+                    renderUsage(r.usage)
                     UsageWidgetProvider.updateAll(this@ConfigActivity)
                 }
-                is FetchResult.Error -> { /* keep showing cached preview */ }
+                is FetchResult.Error -> { /* keep showing cached usage */ }
             }
         }
     }
@@ -133,7 +132,7 @@ class ConfigActivity : AppCompatActivity() {
                     } else {
                         getString(R.string.connected)
                     }
-                    renderPreview(r.usage)
+                    renderUsage(r.usage)
                 }
                 is FetchResult.Error -> binding.status.text = "✕ ${r.message}"
             }
@@ -156,20 +155,8 @@ class ConfigActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderPreview(usage: io.github.polymertheory.usagewidget.model.Usage? =
-        UsageRepository.cached(this)) {
-        val density = resources.displayMetrics.density
-        val dark = (resources.configuration.uiMode and
-            Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        // The in-app view is always the large detailed card with percentages,
-        // regardless of the widget's own compact/card style.
-        val w = (360 * density).toInt()
-        val h = (150 * density).toInt()
-        binding.preview.setImageBitmap(
-            WidgetRenderer.render(
-                usage, w, h, density, dark, WidgetStyle.CARD,
-                if (usage == null) "preview" else null,
-            ),
-        )
+    private fun renderUsage(usage: Usage? = UsageRepository.cached(this)) {
+        UsageDetailRenderer.bind(binding.codexCard, "Codex", usage?.codex)
+        UsageDetailRenderer.bind(binding.claudeCard, "Claude", usage?.claude)
     }
 }
