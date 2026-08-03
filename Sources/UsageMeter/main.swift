@@ -542,8 +542,17 @@ struct UsagePopoverView: View {
                     .buttonStyle(.link)
             }
 
-            ForEach(model.snapshot.providers, id: \.provider.rawValue) { provider in
-                ProviderView(provider: provider)
+            if model.snapshot.providers.isEmpty {
+                // Cold start (or a fresh relaunch) before the first fetch lands:
+                // show named placeholders with a spinner rather than an empty
+                // box, so the popover reads as "loading" instead of "broken".
+                ForEach(["Codex", "Claude"], id: \.self) { name in
+                    LoadingProviderView(name: name)
+                }
+            } else {
+                ForEach(model.snapshot.providers, id: \.provider.rawValue) { provider in
+                    ProviderView(provider: provider)
+                }
             }
 
             Text("Codex uses logged rate-limit snapshots when available. Claude uses Anthropic OAuth usage data when available.")
@@ -749,6 +758,29 @@ struct ProviderView: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Placeholder card shown for each provider before the first snapshot lands,
+/// so a cold start looks like it's loading rather than blank.
+struct LoadingProviderView: View {
+    let name: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+            Text("Loading usage…")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(10)
         .background(.quaternary.opacity(0.4))

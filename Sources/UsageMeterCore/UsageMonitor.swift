@@ -146,12 +146,23 @@ public final class UsageMonitor: @unchecked Sendable {
         }
         if isLive(claude) { providers["claude"] = SharedProvider(claude, at: now, by: host) }
 
+        // Guard against a destructive partial write. If the pre-publish read
+        // failed (`shared == nil`) we don't know the current remote state, so
+        // publishing only the providers we fetched live this cycle would ERASE
+        // any others that exist remotely. That is exactly how Claude vanished
+        // from the blob: one transient read failure on a Codex-only cycle wiped
+        // it, and with Claude rate-limited everywhere nothing re-added it. Only
+        // publish on a failed read when we have a COMPLETE live picture (so the
+        // blob we write is authoritative, not a lossy subset).
+        let completeLocalPicture = isLive(codex) && isLive(claude)
+        let safeToWrite = (shared != nil) || completeLocalPicture
+
         // Decide whether to write. With coordination on, we only reach here when
         // no fresh shared reading was available, so we just polled — refresh the
         // shared blob (and its lease timestamp) whenever we got live data.
         // Without coordination, write only on change or a periodic heartbeat, to
         // respect Cloudflare KV's 1,000 writes/day free tier.
-        if !providers.isEmpty {
+        if !providers.isEmpty, safeToWrite {
             let haveLive = isLive(codex) || isLive(claude)
             let shouldWrite: Bool
             if sync.coordinate {
