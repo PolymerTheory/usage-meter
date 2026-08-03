@@ -558,6 +558,7 @@ struct UsagePopoverView: View {
     let checkForUpdates: () -> Void
     let autoUpdate: Binding<Bool>
     @State private var showingSync = false
+    @State private var showingSettings = false
 
     static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
 
@@ -565,6 +566,8 @@ struct UsagePopoverView: View {
         Group {
             if showingSync {
                 SyncSettingsView(model: model, onClose: { showingSync = false })
+            } else if showingSettings {
+                SettingsView(model: model, autoUpdate: autoUpdate, onClose: { showingSettings = false })
             } else {
                 usageView
             }
@@ -587,6 +590,11 @@ struct UsagePopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Sync across devices")
+                Button(action: { showingSettings = true }) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Settings")
                 Button(action: checkForUpdates) {
                     Image(systemName: "arrow.down.circle")
                 }
@@ -618,7 +626,7 @@ struct UsagePopoverView: View {
             }
 
             if model.enabledProviderNames.isEmpty {
-                Text("No providers shown — turn on Codex or Claude below.")
+                Text("No providers shown — turn on Codex or Claude in Settings (the gear icon above).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -635,8 +643,40 @@ struct UsagePopoverView: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                Text("Show:").font(.caption2).foregroundStyle(.secondary)
+            Text("Codex uses logged rate-limit snapshots when available. Claude uses Anthropic OAuth usage data when available.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Small settings sheet reached via the gear — keeps set-and-forget options out
+/// of the glanceable main popover.
+struct SettingsView: View {
+    @ObservedObject var model: UsageViewModel
+    let autoUpdate: Binding<Bool>
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Button(action: onClose) {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                Text("Settings")
+                    .font(.headline)
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Show").font(.subheadline.weight(.semibold))
+                Text("Which tools appear in the menu-bar icon and this popover. Auto-detected on first run from which you're signed into.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Toggle("Codex", isOn: Binding(
                     get: { model.codexEnabled },
                     set: { model.setEnabled(.codex, $0) }
@@ -645,25 +685,21 @@ struct UsagePopoverView: View {
                     get: { model.claudeEnabled },
                     set: { model.setEnabled(.claude, $0) }
                 ))
-                Spacer()
             }
             .toggleStyle(.checkbox)
-            .controlSize(.small)
-            .font(.caption2)
 
-            Text("Codex uses logged rate-limit snapshots when available. Claude uses Anthropic OAuth usage data when available.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Updates").font(.subheadline.weight(.semibold))
+                Toggle("Update automatically", isOn: autoUpdate)
+                    .toggleStyle(.checkbox)
+                Text("Off by default. When on, UsageMeter checks every few hours and installs updates silently. Otherwise use the ↓ button on the main screen to update manually.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer(minLength: 0)
-
-            Toggle(isOn: autoUpdate) {
-                Text("Update automatically").font(.caption2).foregroundStyle(.secondary)
-            }
-            .toggleStyle(.checkbox)
-            .controlSize(.small)
-            .help("Off by default. When on, UsageMeter checks every few hours and installs updates silently. Otherwise use the ↓ button to update manually.")
         }
     }
 }
