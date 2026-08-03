@@ -41,6 +41,14 @@ public final class UsageMonitor: @unchecked Sendable {
     /// Local log activity remains a fallback when Claude hooks are not installed.
     private static let activityWindow: TimeInterval = 30
 
+    /// Whether each provider's credentials are present on this machine. Used to
+    /// auto-enable/disable the provider's display on first run — a user who only
+    /// uses one tool then sees just that one, and can flip either on/off later.
+    public func providerAvailability(now: Date = Date()) -> (codex: Bool, claude: Bool) {
+        (codex: codexAPIReader.hasCredentials(home: home),
+         claude: claudeAPIReader.hasCredentials(home: home, now: now))
+    }
+
     /// - Parameter force: for a user-initiated refresh. Skips the coordination
     ///   fast-path and the readers' short-lived caches so the call really goes
     ///   to the provider APIs and the timestamp actually moves.

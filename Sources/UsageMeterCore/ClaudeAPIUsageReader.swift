@@ -196,6 +196,12 @@ public struct ClaudeAPIUsageReader {
         )
     }
 
+    /// Whether Claude Code credentials are present anywhere we look — used to
+    /// auto-enable the provider on first run.
+    public func hasCredentials(home: URL, now: Date = Date()) -> Bool {
+        loadCredentials(home: home, now: now) != nil
+    }
+
     private func loadCredentials(home: URL, now: Date) -> ClaudeCredentials? {
         loadCredentialsFromUsageMeterKeychain(now: now)
             ?? loadCredentialsFromFile(home: home)

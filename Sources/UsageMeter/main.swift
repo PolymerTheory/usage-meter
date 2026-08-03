@@ -105,7 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.imagePosition = .imageOnly
         button.title = ""
         button.toolTip = "UsageMeter: Codex and Claude quota"
-        statusItem.length = 28
 
         // Only re-render the icon (and log) when the visible state changes.
         // The 1-second activity timer calls this constantly; rebuilding the
@@ -115,7 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard signature != lastRenderSignature else { return }
         lastRenderSignature = signature
 
-        button.image = MeterIconRenderer.image(snapshot: snapshot)
+        let icon = MeterIconRenderer.image(snapshot: snapshot)
+        button.image = icon
+        // Size the menu-bar item to the icon so it shrinks when only one
+        // provider is shown (2 bars) rather than reserving room for four.
+        statusItem.length = icon.size.width + 6
         let activeProviders = snapshot.providers
             .filter(\.isActive)
             .map { $0.provider.rawValue }
@@ -364,13 +367,85 @@ final class UsageViewModel: ObservableObject {
     @Published private(set) var isRefreshing = false
     /// Set after a forced refresh that couldn't get live data, so the user sees why.
     @Published private(set) var refreshStatus: String?
+    /// Per-provider display toggles. The backend still polls both; these only
+    /// control what appears in the icon and popover.
+    @Published private(set) var codexEnabled = true
+    @Published private(set) var claudeEnabled = true
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
     private let configLoader = UsageConfigLoader()
+    /// The unfiltered reading from the monitor. `snapshot` is this filtered to
+    /// the enabled providers; keeping both lets a toggle re-filter instantly
+    /// without re-polling.
+    private var fullSnapshot: UsageSnapshot = .empty
 
     init() {
-        syncConfig = UsageConfigLoader().load().sync ?? SyncConfig()
+        let config = UsageConfigLoader().load()
+        syncConfig = config.sync ?? SyncConfig()
+
+        // Resolve the display toggles. When a provider's flag is unset (first
+        // run), auto-detect it from whether its credentials exist and persist a
+        // concrete value the user can flip later.
+        if config.codex.enabled == nil || config.claude.enabled == nil {
+            let avail = monitor.providerAvailability()
+            if !avail.codex && !avail.claude {
+                // Not signed into either yet — show both rather than a blank
+                // icon; the unavailable bars prompt the user to sign in.
+                codexEnabled = config.codex.enabled ?? true
+                claudeEnabled = config.claude.enabled ?? true
+            } else {
+                codexEnabled = config.codex.enabled ?? avail.codex
+                claudeEnabled = config.claude.enabled ?? avail.claude
+            }
+            try? configLoader.saveProviderEnablement(codex: codexEnabled, claude: claudeEnabled)
+        } else {
+            codexEnabled = config.codex.enabled ?? true
+            claudeEnabled = config.claude.enabled ?? true
+        }
+
         refreshClaudeHookStatus()
+    }
+
+    /// Names of the providers currently shown, in display order — drives the
+    /// loading placeholders and the "nothing enabled" hint.
+    var enabledProviderNames: [String] {
+        var names: [String] = []
+        if codexEnabled { names.append("Codex") }
+        if claudeEnabled { names.append("Claude") }
+        return names
+    }
+
+    func isEnabled(_ provider: UsageProvider) -> Bool {
+        switch provider {
+        case .codex: return codexEnabled
+        case .claude: return claudeEnabled
+        }
+    }
+
+    /// Flip a provider's display toggle, persist it, and re-filter immediately
+    /// (no re-poll needed — the data for both providers is already in hand).
+    func setEnabled(_ provider: UsageProvider, _ on: Bool) {
+        switch provider {
+        case .codex: codexEnabled = on
+        case .claude: claudeEnabled = on
+        }
+        try? configLoader.saveProviderEnablement(codex: codexEnabled, claude: claudeEnabled)
+        applyDisplayFilter()
+    }
+
+    private func filtered(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+        UsageSnapshot(
+            providers: snapshot.providers.filter { isEnabled($0.provider) },
+            generatedAt: snapshot.generatedAt
+        )
+    }
+
+    /// Recompute the displayed snapshot from `fullSnapshot` and push it to the
+    /// icon. Called after a poll, an activity update, or a toggle change.
+    private func applyDisplayFilter() {
+        let display = filtered(fullSnapshot)
+        snapshot = display
+        onSnapshot?(display)
     }
 
     /// Persist the sync section (clearing it entirely when disabled and empty),
@@ -429,11 +504,12 @@ final class UsageViewModel: ObservableObject {
             let snapshot = await Task.detached(priority: .utility) {
                 monitor.snapshot(force: force)
             }.value
-            self.snapshot = snapshot
-            self.onSnapshot?(snapshot)
+            self.fullSnapshot = snapshot
+            self.applyDisplayFilter()
             if force {
                 self.isRefreshing = false
-                self.refreshStatus = Self.refreshProblem(in: snapshot)
+                // Only report problems for providers the user actually shows.
+                self.refreshStatus = Self.refreshProblem(in: self.snapshot)
             }
         }
     }
@@ -454,13 +530,13 @@ final class UsageViewModel: ObservableObject {
     }
 
     func refreshActivity() {
-        guard !snapshot.providers.isEmpty else { return }
+        guard !fullSnapshot.providers.isEmpty else { return }
         Task {
             let monitor = self.monitor
             let states = await Task.detached(priority: .utility) {
                 monitor.activityStates()
             }.value
-            let updatedProviders = self.snapshot.providers.map { provider in
+            let updatedProviders = self.fullSnapshot.providers.map { provider in
                 ProviderUsage(
                     provider: provider.provider,
                     shortWindow: provider.shortWindow,
@@ -471,9 +547,8 @@ final class UsageViewModel: ObservableObject {
                     isActive: states[provider.provider] ?? provider.isActive
                 )
             }
-            let updatedSnapshot = UsageSnapshot(providers: updatedProviders, generatedAt: self.snapshot.generatedAt)
-            self.snapshot = updatedSnapshot
-            self.onSnapshot?(updatedSnapshot)
+            self.fullSnapshot = UsageSnapshot(providers: updatedProviders, generatedAt: self.fullSnapshot.generatedAt)
+            self.applyDisplayFilter()
         }
     }
 }
@@ -542,11 +617,16 @@ struct UsagePopoverView: View {
                     .buttonStyle(.link)
             }
 
-            if model.snapshot.providers.isEmpty {
+            if model.enabledProviderNames.isEmpty {
+                Text("No providers shown — turn on Codex or Claude below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if model.snapshot.providers.isEmpty {
                 // Cold start (or a fresh relaunch) before the first fetch lands:
                 // show named placeholders with a spinner rather than an empty
                 // box, so the popover reads as "loading" instead of "broken".
-                ForEach(["Codex", "Claude"], id: \.self) { name in
+                ForEach(model.enabledProviderNames, id: \.self) { name in
                     LoadingProviderView(name: name)
                 }
             } else {
@@ -554,6 +634,22 @@ struct UsagePopoverView: View {
                     ProviderView(provider: provider)
                 }
             }
+
+            HStack(spacing: 12) {
+                Text("Show:").font(.caption2).foregroundStyle(.secondary)
+                Toggle("Codex", isOn: Binding(
+                    get: { model.codexEnabled },
+                    set: { model.setEnabled(.codex, $0) }
+                ))
+                Toggle("Claude", isOn: Binding(
+                    get: { model.claudeEnabled },
+                    set: { model.setEnabled(.claude, $0) }
+                ))
+                Spacer()
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .font(.caption2)
 
             Text("Codex uses logged rate-limit snapshots when available. Claude uses Anthropic OAuth usage data when available.")
                 .font(.caption)
@@ -942,41 +1038,70 @@ private func relativeDate(_ date: Date) -> String {
 }
 
 enum MeterIconRenderer {
+    private static let barWidth: CGFloat = 3.5
+    private static let gap: CGFloat = 2.0
+    private static let leftPad: CGFloat = 2.0
+    private static let rightPad: CGFloat = 2.0
+
+    /// Icon width for the given number of bars, so the menu-bar item shrinks to
+    /// fit when only one provider is shown (2 bars) instead of two (4 bars).
+    static func width(forBars bars: Int) -> CGFloat {
+        let n = max(bars, 1)
+        return leftPad + CGFloat(n) * barWidth + CGFloat(n - 1) * gap + rightPad
+    }
+
     static func image(snapshot: UsageSnapshot) -> NSImage {
-        let size = NSSize(width: 22, height: 18)
+        // Only providers present in the snapshot are drawn, in a stable order,
+        // two bars each — so a display filtered to one provider yields 2 bars.
+        let order: [UsageProvider] = [.codex, .claude]
+        let providers = order.compactMap { p in snapshot.providers.first { $0.provider == p } }
+        let barCount = max(providers.count * 2, 1)
+
+        let size = NSSize(width: width(forBars: barCount), height: 18)
         let image = NSImage(size: size)
         image.lockFocus()
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
 
-        let values = iconValues(snapshot: snapshot)
-        let barWidth: CGFloat = 3.5
-        let gap: CGFloat = 2.0
         let baseline: CGFloat = 2.0
         let maxHeight: CGFloat = 14.0
 
-        for (index, value) in values.enumerated() {
-            let x = 2 + CGFloat(index) * (barWidth + gap)
-            // An unknown window (nil) renders as a short gray stub so the user
-            // can tell quota data is missing rather than reading it as "empty".
-            let height = value.map { max(2, maxHeight * CGFloat($0)) } ?? 3
-            let rect = NSRect(x: x, y: baseline, width: barWidth, height: height)
-            color(for: value).setFill()
+        func barX(_ index: Int) -> CGFloat { leftPad + CGFloat(index) * (barWidth + gap) }
+
+        // Nothing enabled: draw a single neutral stub so the item stays visible
+        // and clickable; the popover explains how to turn a provider back on.
+        if providers.isEmpty {
+            let rect = NSRect(x: barX(0), y: baseline, width: barWidth, height: 3)
+            NSColor.systemGray.setFill()
             NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+            image.unlockFocus()
+            image.isTemplate = false
+            return image
+        }
+
+        var barIndex = 0
+        for provider in providers {
+            for window in [provider.shortWindow, provider.longWindow] {
+                let v = value(window)
+                // An unknown window (nil) renders as a short gray stub so the
+                // user can tell quota data is missing rather than reading it as
+                // "empty".
+                let height = v.map { max(2, maxHeight * CGFloat($0)) } ?? 3
+                let rect = NSRect(x: barX(barIndex), y: baseline, width: barWidth, height: height)
+                color(for: v).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+                barIndex += 1
+            }
         }
 
         // Activity dots: a small filled circle at the base of each provider's
-        // bar pair when that provider has written session logs in the last 2 min.
-        let codex  = snapshot.providers.first { $0.provider == .codex }
-        let claude = snapshot.providers.first { $0.provider == .claude }
+        // bar pair when that provider has written session logs recently.
         let dotY: CGFloat = 0.4
         let dotR: CGFloat = 1.25
-        // Codex bars are at indices 0 and 1; Claude at 2 and 3.
-        for (isActive, barIndex) in [(codex?.isActive == true, 0), (claude?.isActive == true, 2)] {
-            guard isActive else { continue }
-            let x0 = 2 + CGFloat(barIndex) * (barWidth + gap)
-            let x1 = 2 + CGFloat(barIndex + 1) * (barWidth + gap) + barWidth
-            let cx  = (x0 + x1) / 2
+        for (p, provider) in providers.enumerated() where provider.isActive {
+            let x0 = barX(p * 2)
+            let x1 = barX(p * 2 + 1) + barWidth
+            let cx = (x0 + x1) / 2
             let dotRect = NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)
             let dot = NSBezierPath(ovalIn: dotRect)
             // White fill with a dark outline so the dot stays visible on ANY
@@ -992,20 +1117,6 @@ enum MeterIconRenderer {
         image.unlockFocus()
         image.isTemplate = false
         return image
-    }
-
-    /// Returns the fraction used for each bar, or nil when the value is unknown
-    /// (provider missing or quota unavailable) so the icon can distinguish
-    /// "unknown" from a genuine zero.
-    private static func iconValues(snapshot: UsageSnapshot) -> [Double?] {
-        let codex = snapshot.providers.first { $0.provider == .codex }
-        let claude = snapshot.providers.first { $0.provider == .claude }
-        return [
-            value(codex?.shortWindow),
-            value(codex?.longWindow),
-            value(claude?.shortWindow),
-            value(claude?.longWindow)
-        ]
     }
 
     private static func value(_ window: UsageWindow?) -> Double? {

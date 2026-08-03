@@ -94,12 +94,18 @@ public struct SyncConfig: Codable, Equatable, Sendable {
 }
 
 public struct ProviderConfig: Codable, Equatable, Sendable {
+    /// Whether this provider is shown in the icon and popover. `nil` means "not
+    /// yet decided": on first run the app auto-detects whether the provider's
+    /// credentials exist and persists a concrete value, which the user can then
+    /// toggle. Display-only — it does not change what the backend polls.
+    public var enabled: Bool?
     public var shortWindowHours: Double
     public var longWindowDays: Double
     public var shortLimitTokens: Int
     public var longLimitTokens: Int
 
-    public init(shortWindowHours: Double, longWindowDays: Double, shortLimitTokens: Int, longLimitTokens: Int) {
+    public init(enabled: Bool? = nil, shortWindowHours: Double, longWindowDays: Double, shortLimitTokens: Int, longLimitTokens: Int) {
+        self.enabled = enabled
         self.shortWindowHours = shortWindowHours
         self.longWindowDays = longWindowDays
         self.shortLimitTokens = shortLimitTokens
@@ -147,6 +153,16 @@ public struct UsageConfigLoader {
         config.sync = sync
         try writeMain(config, home: home)
         writeSyncBackup(sync, home: home)
+    }
+
+    /// Persist the per-provider display toggles, preserving everything else
+    /// (window sizes, sync). Uses `load` so a sync section restored from backup
+    /// is not dropped when the main file is written back.
+    public func saveProviderEnablement(codex: Bool?, claude: Bool?, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        var config = load(home: home)
+        config.codex.enabled = codex
+        config.claude.enabled = claude
+        try writeMain(config, home: home)
     }
 
     // MARK: - File helpers

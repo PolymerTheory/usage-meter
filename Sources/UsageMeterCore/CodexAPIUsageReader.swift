@@ -125,6 +125,12 @@ public struct CodexAPIUsageReader {
         let accountId: String?
     }
 
+    /// Whether Codex credentials are present — used to auto-enable the provider
+    /// on first run. Cheap: just reads and parses `~/.codex/auth.json`.
+    public func hasCredentials(home: URL) -> Bool {
+        loadCredentials(home: home) != nil
+    }
+
     private func loadCredentials(home: URL) -> Credentials? {
         let url = home.appendingPathComponent(".codex/auth.json")
         guard let data = try? Data(contentsOf: url),

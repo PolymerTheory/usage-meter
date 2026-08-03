@@ -492,6 +492,32 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertNil(loader.load(home: root).sync, "a deliberate disable must not be restored")
     }
 
+    func testProviderEnabledDefaultsToNilForOldConfigs() throws {
+        let root = try temporaryLogRoot()
+        // A config written before the toggle existed has no "enabled" key.
+        try #"{"codex":{"shortWindowHours":5,"longWindowDays":7,"shortLimitTokens":100000,"longLimitTokens":500000}}"#
+            .write(to: root.appendingPathComponent(".usage-meter.json"), atomically: true, encoding: .utf8)
+        let config = UsageConfigLoader().load(home: root)
+        // nil means "not yet decided" so the app auto-detects on first run.
+        XCTAssertNil(config.codex.enabled)
+        XCTAssertNil(config.claude.enabled)
+    }
+
+    func testSaveProviderEnablementPersistsAndPreservesSync() throws {
+        let root = try temporaryLogRoot()
+        let loader = UsageConfigLoader()
+        try loader.saveSync(SyncConfig(enabled: true, url: "https://ex.com/u/K", token: "t"), home: root)
+
+        try loader.saveProviderEnablement(codex: true, claude: false, home: root)
+
+        let config = loader.load(home: root)
+        XCTAssertEqual(config.codex.enabled, true)
+        XCTAssertEqual(config.claude.enabled, false)
+        // The toggle write must not drop the sync section or the window sizes.
+        XCTAssertEqual(config.sync?.url, "https://ex.com/u/K")
+        XCTAssertEqual(config.codex.shortLimitTokens, ProviderConfig.codexDefault.shortLimitTokens)
+    }
+
     func testConfigLoaderReadsCoordinateFlag() throws {
         let root = try temporaryLogRoot()
         try #"{"sync":{"enabled":true,"url":"https://ex.com/u/K","coordinate":true,"freshnessSeconds":200}}"#
