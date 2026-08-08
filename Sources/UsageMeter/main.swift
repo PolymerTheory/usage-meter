@@ -81,17 +81,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Poll quota every 2 minutes. The Claude reader additionally throttles
         // its own live calls (see ClaudeAPIUsageReader.minLiveInterval) so this
         // cadence — plus popover-open refreshes — can't burst-hit that API.
-        Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.model.refreshQuota()
-            }
+        // Added in .common run-loop modes so they keep firing while a popover or
+        // menu is in tracking mode (a .default-mode timer pauses during that).
+        let quotaTimer = Timer(timeInterval: 120, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.model.refreshQuota() }
         }
+        RunLoop.main.add(quotaTimer, forMode: .common)
 
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.model.refreshActivity()
-            }
+        let activityTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.model.refreshActivity() }
         }
+        RunLoop.main.add(activityTimer, forMode: .common)
     }
 
     private func configureStatusButton(with snapshot: UsageSnapshot) {
@@ -569,14 +569,22 @@ struct UsagePopoverView: View {
             } else if showingSettings {
                 SettingsView(model: model, autoUpdate: autoUpdate, onClose: { showingSettings = false })
             } else {
-                usageView
+                // Tick every second so the reset countdown and "Updated Xm ago"
+                // stay live while the popover is open. Deriving them only from
+                // the snapshot object meant they froze at whatever time the last
+                // snapshot arrived (or the popover opened) — a run-loop timer in
+                // .default mode doesn't fire during popover tracking, so an open
+                // popover could show a badly stale countdown.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    usageView(now: context.date)
+                }
             }
         }
         .padding(16)
         .frame(width: 380, height: 430)
     }
 
-    private var usageView: some View {
+    private func usageView(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
                 Text("AI Usage")
@@ -639,7 +647,7 @@ struct UsagePopoverView: View {
                 }
             } else {
                 ForEach(model.snapshot.providers, id: \.provider.rawValue) { provider in
-                    ProviderView(provider: provider)
+                    ProviderView(provider: provider, now: now)
                 }
             }
 
@@ -855,6 +863,9 @@ enum QRCode {
 
 struct ProviderView: View {
     let provider: ProviderUsage
+    /// Live clock, ticked by the popover's TimelineView, so relative labels
+    /// ("Updated Xm ago", the reset countdown) stay current instead of frozen.
+    var now: Date = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -875,8 +886,8 @@ struct ProviderView: View {
             if provider.isUnavailable {
                 UnavailableProviderView(provider: provider)
             } else {
-                WindowRow(window: provider.shortWindow)
-                WindowRow(window: provider.longWindow)
+                WindowRow(window: provider.shortWindow, now: now)
+                WindowRow(window: provider.longWindow, now: now)
             }
 
             HStack(spacing: 8) {
@@ -884,7 +895,7 @@ struct ProviderView: View {
                 Spacer(minLength: 0)
                 // Give "Updated" priority so it never truncates; detail gets
                 // whatever space remains and truncates gracefully if needed.
-                Text("Updated \(relativeDate(provider.lastUpdated))")
+                Text("Updated \(relativeDate(provider.lastUpdated, now: now))")
                     .fixedSize()
                     .layoutPriority(1)
             }
@@ -958,6 +969,8 @@ struct UsageBar: View {
 
 struct WindowRow: View {
     let window: UsageWindow
+    /// Live clock from the popover's TimelineView so the reset countdown ticks.
+    var now: Date = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1006,7 +1019,6 @@ struct WindowRow: View {
         guard let resetDate = window.resetDate else {
             return "reset unknown"
         }
-        let now = Date()
         let seconds = resetDate.timeIntervalSince(now)
         guard seconds > 0 else { return "resetting…" }
 
@@ -1067,10 +1079,10 @@ private func formatCount(_ value: Int) -> String {
     return formatter.string(from: NSNumber(value: value)) ?? String(value)
 }
 
-private func relativeDate(_ date: Date) -> String {
+private func relativeDate(_ date: Date, now: Date = Date()) -> String {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .abbreviated
-    return formatter.localizedString(for: date, relativeTo: Date())
+    return formatter.localizedString(for: date, relativeTo: now)
 }
 
 enum MeterIconRenderer {
