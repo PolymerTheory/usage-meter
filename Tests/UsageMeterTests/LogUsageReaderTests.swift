@@ -518,6 +518,42 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(config.codex.shortLimitTokens, ProviderConfig.codexDefault.shortLimitTokens)
     }
 
+    func testMeterColorsPickByThreshold() {
+        let c = MeterColors.default   // 55% / 80%
+        XCTAssertEqual(c.hex(forFraction: 0.10), c.lowHex)
+        XCTAssertEqual(c.hex(forFraction: 0.54), c.lowHex)
+        XCTAssertEqual(c.hex(forFraction: 0.55), c.midHex)   // boundary is mid
+        XCTAssertEqual(c.hex(forFraction: 0.79), c.midHex)
+        XCTAssertEqual(c.hex(forFraction: 0.80), c.highHex)  // boundary is high
+        XCTAssertEqual(c.hex(forFraction: 1.20), c.highHex)
+    }
+
+    func testMeterColorsDecodeFillsGapsAndClampsThresholds() throws {
+        // Only one field present, thresholds out of order / out of range.
+        let json = ##"{"lowHex":"#112233","midThreshold":2.0,"highThreshold":0.5}"##
+        let c = try SyncClient.decoder.decode(MeterColors.self, from: Data(json.utf8))
+        XCTAssertEqual(c.lowHex, "#112233")
+        XCTAssertEqual(c.midHex, MeterColors.default.midHex)   // filled from default
+        XCTAssertEqual(c.midThreshold, 0.99, accuracy: 1e-9)   // clamped to <=0.99
+        XCTAssertEqual(c.highThreshold, 0.99, accuracy: 1e-9)  // clamped up to mid
+    }
+
+    func testSaveColorsPersistsAndPreservesSync() throws {
+        let root = try temporaryLogRoot()
+        let loader = UsageConfigLoader()
+        try loader.saveSync(SyncConfig(enabled: true, url: "https://ex.com/u/K", token: "t"), home: root)
+
+        var colors = MeterColors.default
+        colors.highThreshold = 0.9
+        colors.lowHex = "#00FF00"
+        try loader.saveColors(colors, home: root)
+
+        let config = loader.load(home: root)
+        XCTAssertEqual(config.colors.highThreshold, 0.9, accuracy: 1e-9)
+        XCTAssertEqual(config.colors.lowHex, "#00FF00")
+        XCTAssertEqual(config.sync?.url, "https://ex.com/u/K")   // untouched
+    }
+
     func testConfigLoaderReadsCoordinateFlag() throws {
         let root = try temporaryLogRoot()
         try #"{"sync":{"enabled":true,"url":"https://ex.com/u/K","coordinate":true,"freshnessSeconds":200}}"#

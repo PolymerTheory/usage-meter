@@ -5,15 +5,19 @@ public struct UsageMeterConfig: Codable, Equatable, Sendable {
     public var claude: ProviderConfig
     /// Optional cross-device sync. Absent/disabled by default.
     public var sync: SyncConfig?
+    /// Bar colors and the usage thresholds where they change.
+    public var colors: MeterColors
 
     public init(
         codex: ProviderConfig = .codexDefault,
         claude: ProviderConfig = .claudeDefault,
-        sync: SyncConfig? = nil
+        sync: SyncConfig? = nil,
+        colors: MeterColors = .default
     ) {
         self.codex = codex
         self.claude = claude
         self.sync = sync
+        self.colors = colors
     }
 
     public static var `default`: UsageMeterConfig {
@@ -21,7 +25,7 @@ public struct UsageMeterConfig: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case codex, claude, sync
+        case codex, claude, sync, colors
     }
 
     // Decode each section independently so a partial config (e.g. only a sync
@@ -31,6 +35,7 @@ public struct UsageMeterConfig: Codable, Equatable, Sendable {
         self.codex = try c.decodeIfPresent(ProviderConfig.self, forKey: .codex) ?? .codexDefault
         self.claude = try c.decodeIfPresent(ProviderConfig.self, forKey: .claude) ?? .claudeDefault
         self.sync = try c.decodeIfPresent(SyncConfig.self, forKey: .sync)
+        self.colors = try c.decodeIfPresent(MeterColors.self, forKey: .colors) ?? .default
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -38,6 +43,57 @@ public struct UsageMeterConfig: Codable, Equatable, Sendable {
         try c.encode(codex, forKey: .codex)
         try c.encode(claude, forKey: .claude)
         try c.encodeIfPresent(sync, forKey: .sync)
+        try c.encode(colors, forKey: .colors)
+    }
+}
+
+/// The three usage-bar colors and the two thresholds at which the bar switches
+/// from `low` → `mid` → `high`. Colors are `#RRGGBB` hex; thresholds are
+/// fractions in 0…1 (e.g. 0.55 = 55%). Defaults reproduce the original
+/// green/yellow/red at 55% / 80%.
+public struct MeterColors: Codable, Equatable, Sendable {
+    public var lowHex: String
+    public var midHex: String
+    public var highHex: String
+    /// Below this fraction the bar is `low`; at/above it becomes `mid`.
+    public var midThreshold: Double
+    /// At/above this fraction the bar becomes `high`.
+    public var highThreshold: Double
+
+    public init(lowHex: String, midHex: String, highHex: String, midThreshold: Double, highThreshold: Double) {
+        self.lowHex = lowHex
+        self.midHex = midHex
+        self.highHex = highHex
+        self.midThreshold = midThreshold
+        self.highThreshold = highThreshold
+    }
+
+    // Match Apple's systemGreen / systemYellow / systemRed so restoring the
+    // default keeps the look users already have.
+    public static let `default` = MeterColors(
+        lowHex: "#34C759", midHex: "#FFCC00", highHex: "#FF3B30",
+        midThreshold: 0.55, highThreshold: 0.80
+    )
+
+    /// Which color a given usage fraction falls into.
+    public func hex(forFraction fraction: Double) -> String {
+        if fraction < midThreshold { return lowHex }
+        if fraction < highThreshold { return midHex }
+        return highHex
+    }
+
+    // Tolerate a partial/hand-edited block by filling gaps from the default,
+    // and keep thresholds ordered and in range so the UI can't be wedged.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = MeterColors.default
+        self.lowHex = try c.decodeIfPresent(String.self, forKey: .lowHex) ?? d.lowHex
+        self.midHex = try c.decodeIfPresent(String.self, forKey: .midHex) ?? d.midHex
+        self.highHex = try c.decodeIfPresent(String.self, forKey: .highHex) ?? d.highHex
+        let mid = try c.decodeIfPresent(Double.self, forKey: .midThreshold) ?? d.midThreshold
+        let high = try c.decodeIfPresent(Double.self, forKey: .highThreshold) ?? d.highThreshold
+        self.midThreshold = min(max(mid, 0.01), 0.99)
+        self.highThreshold = min(max(high, self.midThreshold), 0.99)
     }
 }
 
@@ -162,6 +218,13 @@ public struct UsageConfigLoader {
         var config = load(home: home)
         config.codex.enabled = codex
         config.claude.enabled = claude
+        try writeMain(config, home: home)
+    }
+
+    /// Persist the bar colors/thresholds, preserving everything else.
+    public func saveColors(_ colors: MeterColors, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        var config = load(home: home)
+        config.colors = colors
         try writeMain(config, home: home)
     }
 

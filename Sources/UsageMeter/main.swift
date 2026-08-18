@@ -110,11 +110,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // The 1-second activity timer calls this constantly; rebuilding the
         // NSImage and writing a log line every tick wastes CPU and floods the
         // diagnostics log.
-        let signature = Self.renderSignature(for: snapshot)
+        let colors = model.colors
+        let signature = Self.renderSignature(for: snapshot, colors: colors)
         guard signature != lastRenderSignature else { return }
         lastRenderSignature = signature
 
-        let icon = MeterIconRenderer.image(snapshot: snapshot)
+        let icon = MeterIconRenderer.image(snapshot: snapshot, colors: colors)
         button.image = icon
         // Size the menu-bar item to the icon so it shrinks when only one
         // provider is shown (2 bars) rather than reserving room for four.
@@ -131,13 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// Compact description of everything the menu-bar icon depends on:
     /// each window's integer percent (or "x" when unavailable) and the
     /// per-provider active flag.
-    private static func renderSignature(for snapshot: UsageSnapshot) -> String {
-        snapshot.providers.map { provider in
+    private static func renderSignature(for snapshot: UsageSnapshot, colors: MeterColors) -> String {
+        let providerPart = snapshot.providers.map { provider in
             func part(_ window: UsageWindow) -> String {
                 window.unitName == "unavailable" ? "x" : String(Int(window.fractionUsed * 100))
             }
             return "\(provider.provider.rawValue):\(part(provider.shortWindow)):\(part(provider.longWindow)):\(provider.isActive)"
         }.joined(separator: "|")
+        // Include colors so the icon re-renders when the scheme changes even if
+        // the usage numbers didn't.
+        let colorPart = "\(colors.lowHex)\(colors.midHex)\(colors.highHex)\(colors.midThreshold)\(colors.highThreshold)"
+        return providerPart + "#" + colorPart
     }
 
     @objc private func togglePopover() {
@@ -371,6 +376,8 @@ final class UsageViewModel: ObservableObject {
     /// control what appears in the icon and popover.
     @Published private(set) var codexEnabled = true
     @Published private(set) var claudeEnabled = true
+    /// Bar colors and thresholds, editable in Settings.
+    @Published private(set) var colors: MeterColors = .default
     var onSnapshot: ((UsageSnapshot) -> Void)?
     private let monitor = UsageMonitor()
     private let configLoader = UsageConfigLoader()
@@ -382,6 +389,7 @@ final class UsageViewModel: ObservableObject {
     init() {
         let config = UsageConfigLoader().load()
         syncConfig = config.sync ?? SyncConfig()
+        colors = config.colors
 
         // Resolve the display toggles. When a provider's flag is unset (first
         // run), auto-detect it from whether its credentials exist and persist a
@@ -431,6 +439,18 @@ final class UsageViewModel: ObservableObject {
         }
         try? configLoader.saveProviderEnablement(codex: codexEnabled, claude: claudeEnabled)
         applyDisplayFilter()
+    }
+
+    /// Update the color scheme, persist it, and re-render the icon immediately
+    /// (the popover re-renders on its own since `colors` is @Published).
+    func setColors(_ newColors: MeterColors) {
+        colors = newColors
+        try? configLoader.saveColors(newColors)
+        applyDisplayFilter()
+    }
+
+    func restoreDefaultColors() {
+        setColors(.default)
     }
 
     private func filtered(_ snapshot: UsageSnapshot) -> UsageSnapshot {
@@ -647,7 +667,7 @@ struct UsagePopoverView: View {
                 }
             } else {
                 ForEach(model.snapshot.providers, id: \.provider.rawValue) { provider in
-                    ProviderView(provider: provider, now: now)
+                    ProviderView(provider: provider, now: now, colors: model.colors)
                 }
             }
 
@@ -669,7 +689,7 @@ struct SettingsView: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Button(action: onClose) {
                     Image(systemName: "chevron.left")
@@ -680,35 +700,119 @@ struct SettingsView: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Show").font(.subheadline.weight(.semibold))
-                Text("Which tools appear in the menu-bar icon and this popover. Auto-detected on first run from which you're signed into.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Toggle("Codex", isOn: Binding(
-                    get: { model.codexEnabled },
-                    set: { model.setEnabled(.codex, $0) }
-                ))
-                Toggle("Claude", isOn: Binding(
-                    get: { model.claudeEnabled },
-                    set: { model.setEnabled(.claude, $0) }
-                ))
-            }
-            .toggleStyle(.checkbox)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Updates").font(.subheadline.weight(.semibold))
-                Toggle("Update automatically", isOn: autoUpdate)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Show").font(.subheadline.weight(.semibold))
+                        Text("Which tools appear in the menu-bar icon and this popover. Auto-detected on first run from which you're signed into.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle("Codex", isOn: Binding(
+                            get: { model.codexEnabled },
+                            set: { model.setEnabled(.codex, $0) }
+                        ))
+                        Toggle("Claude", isOn: Binding(
+                            get: { model.claudeEnabled },
+                            set: { model.setEnabled(.claude, $0) }
+                        ))
+                    }
                     .toggleStyle(.checkbox)
-                Text("Off by default. When on, UsageMeter checks every few hours and installs updates silently. Otherwise use the ↓ button on the main screen to update manually.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+
+                    Divider()
+
+                    colorsSection
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Updates").font(.subheadline.weight(.semibold))
+                        Toggle("Update automatically", isOn: autoUpdate)
+                            .toggleStyle(.checkbox)
+                        Text("Off by default. When on, UsageMeter checks every few hours and installs updates silently. Otherwise use the ↓ button on the main screen to update manually.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var colorsSection: some View {
+        let midPct = Int((model.colors.midThreshold * 100).rounded())
+        let highPct = Int((model.colors.highThreshold * 100).rounded())
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Colors").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Restore defaults") { model.restoreDefaultColors() }
+                    .font(.caption)
+                    .buttonStyle(.link)
+                    .disabled(model.colors == .default)
+            }
+            Text("The bar color at each usage level, and the thresholds where it switches.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ColorPicker(selection: colorBinding(\.lowHex), supportsOpacity: false) {
+                Text("Low — under \(midPct)%").font(.caption)
+            }
+            ColorPicker(selection: colorBinding(\.midHex), supportsOpacity: false) {
+                Text("Medium — \(midPct)–\(highPct)%").font(.caption)
+            }
+            ColorPicker(selection: colorBinding(\.highHex), supportsOpacity: false) {
+                Text("High — \(highPct)% and up").font(.caption)
             }
 
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Medium starts at \(midPct)%").font(.caption2).foregroundStyle(.secondary)
+                Slider(value: midThresholdBinding, in: 1...98, step: 1)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("High starts at \(highPct)%").font(.caption2).foregroundStyle(.secondary)
+                Slider(value: highThresholdBinding, in: 2...99, step: 1)
+            }
         }
+    }
+
+    /// A ColorPicker binding onto one hex field of the scheme.
+    private func colorBinding(_ keyPath: WritableKeyPath<MeterColors, String>) -> Binding<Color> {
+        Binding(
+            get: { Color(hex: model.colors[keyPath: keyPath]) },
+            set: { newColor in
+                var c = model.colors
+                c[keyPath: keyPath] = newColor.hexString
+                model.setColors(c)
+            }
+        )
+    }
+
+    // Threshold sliders, kept ordered so Medium can never cross above High.
+    private var midThresholdBinding: Binding<Double> {
+        Binding(
+            get: { model.colors.midThreshold * 100 },
+            set: { pct in
+                var c = model.colors
+                c.midThreshold = min(max(pct / 100, 0.01), 0.98)
+                if c.highThreshold <= c.midThreshold {
+                    c.highThreshold = min(c.midThreshold + 0.01, 0.99)
+                }
+                model.setColors(c)
+            }
+        )
+    }
+
+    private var highThresholdBinding: Binding<Double> {
+        Binding(
+            get: { model.colors.highThreshold * 100 },
+            set: { pct in
+                var c = model.colors
+                c.highThreshold = min(max(pct / 100, 0.02), 0.99)
+                if c.midThreshold >= c.highThreshold {
+                    c.midThreshold = max(c.highThreshold - 0.01, 0.01)
+                }
+                model.setColors(c)
+            }
+        )
     }
 }
 
@@ -866,6 +970,7 @@ struct ProviderView: View {
     /// Live clock, ticked by the popover's TimelineView, so relative labels
     /// ("Updated Xm ago", the reset countdown) stay current instead of frozen.
     var now: Date = Date()
+    var colors: MeterColors = .default
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -886,8 +991,8 @@ struct ProviderView: View {
             if provider.isUnavailable {
                 UnavailableProviderView(provider: provider)
             } else {
-                WindowRow(window: provider.shortWindow, now: now)
-                WindowRow(window: provider.longWindow, now: now)
+                WindowRow(window: provider.shortWindow, now: now, colors: colors)
+                WindowRow(window: provider.longWindow, now: now, colors: colors)
             }
 
             HStack(spacing: 8) {
@@ -971,6 +1076,7 @@ struct WindowRow: View {
     let window: UsageWindow
     /// Live clock from the popover's TimelineView so the reset countdown ticks.
     var now: Date = Date()
+    var colors: MeterColors = .default
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1058,11 +1164,7 @@ struct WindowRow: View {
     }()
 
     private var color: Color {
-        switch window.fractionUsed {
-        case 0..<0.55: return .green
-        case 0..<0.80: return .yellow
-        default: return .red
-        }
+        Color(hex: colors.hex(forFraction: window.fractionUsed))
     }
 }
 
@@ -1085,6 +1187,38 @@ private func relativeDate(_ date: Date, now: Date = Date()) -> String {
     return formatter.localizedString(for: date, relativeTo: now)
 }
 
+// MARK: - Hex color helpers
+
+extension NSColor {
+    /// Parse "#RRGGBB" (or "RRGGBB"); falls back to gray on malformed input.
+    convenience init(hex: String) {
+        let s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).uppercased()
+        var v: UInt64 = 0
+        guard s.count == 6, Scanner(string: s).scanHexInt64(&v) else {
+            self.init(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1); return
+        }
+        self.init(
+            srgbRed: CGFloat((v >> 16) & 0xFF) / 255,
+            green: CGFloat((v >> 8) & 0xFF) / 255,
+            blue: CGFloat(v & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+
+    var hexString: String {
+        guard let c = usingColorSpace(.sRGB) else { return "#000000" }
+        return String(format: "#%02X%02X%02X",
+                      Int(round(c.redComponent * 255)),
+                      Int(round(c.greenComponent * 255)),
+                      Int(round(c.blueComponent * 255)))
+    }
+}
+
+extension Color {
+    init(hex: String) { self.init(nsColor: NSColor(hex: hex)) }
+    var hexString: String { NSColor(self).hexString }
+}
+
 enum MeterIconRenderer {
     private static let barWidth: CGFloat = 3.5
     private static let gap: CGFloat = 2.0
@@ -1098,7 +1232,7 @@ enum MeterIconRenderer {
         return leftPad + CGFloat(n) * barWidth + CGFloat(n - 1) * gap + rightPad
     }
 
-    static func image(snapshot: UsageSnapshot) -> NSImage {
+    static func image(snapshot: UsageSnapshot, colors: MeterColors = .default) -> NSImage {
         // Only providers present in the snapshot are drawn, in a stable order,
         // two bars each — so a display filtered to one provider yields 2 bars.
         let order: [UsageProvider] = [.codex, .claude]
@@ -1136,7 +1270,7 @@ enum MeterIconRenderer {
                 // "empty".
                 let height = v.map { max(2, maxHeight * CGFloat($0)) } ?? 3
                 let rect = NSRect(x: barX(barIndex), y: baseline, width: barWidth, height: height)
-                color(for: v).setFill()
+                color(for: v, colors: colors).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
                 barIndex += 1
             }
@@ -1174,17 +1308,10 @@ enum MeterIconRenderer {
         return window.fractionUsed
     }
 
-    private static func color(for value: Double?) -> NSColor {
+    private static func color(for value: Double?, colors: MeterColors) -> NSColor {
         guard let value else {
-            return NSColor.systemGray
+            return NSColor.systemGray  // unknown/unavailable stays a neutral stub
         }
-        switch value {
-        case 0..<0.55:
-            return NSColor.systemGreen
-        case 0..<0.80:
-            return NSColor.systemYellow
-        default:
-            return NSColor.systemRed
-        }
+        return NSColor(hex: colors.hex(forFraction: value))
     }
 }
