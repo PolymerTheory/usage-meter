@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// Signature of the last icon we drew, so the 1-second activity timer does
     /// not re-render the menu-bar image when nothing visible has changed.
     private var lastRenderSignature: String?
+    /// Captures a stack sample if the main thread ever hangs (the intermittent
+    /// "can't close the popover / app frozen" symptom).
+    private let watchdog = MainThreadWatchdog()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LaunchDiagnostics.write("applicationDidFinishLaunching")
@@ -32,6 +35,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         activityToken = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "Keep AI usage meter current"
+        )
+
+        watchdog.start()
+
+        // Extra dismissal path: if the app resigns active (user clicks another
+        // app or the menu bar) close the popover, so it can't get stuck open
+        // even if the global outside-click monitor misses an event.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appResignedActive),
+            name: NSApplication.didResignActiveNotification, object: nil
         )
 
         // Auto-update is opt-in. Build 0.2.11 briefly forced it and persisted
@@ -162,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         removeOutsideClickMonitor()
     }
 
+    @objc private func appResignedActive() {
+        if popover.isShown { closePopover() }
+    }
+
     private func installOutsideClickMonitor() {
         guard outsideClickMonitor == nil else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
@@ -188,10 +205,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 }
 
 enum LaunchDiagnostics {
+    // Serialize writes off the main thread — this is called on every icon
+    // re-render, and synchronous file I/O on the main thread is exactly the kind
+    // of thing that can contribute to a UI stall.
+    private static let queue = DispatchQueue(label: "io.github.PolymerTheory.UsageMeter.diag")
+
     static func write(_ message: String) {
-        let url = URL(fileURLWithPath: "/tmp/UsageMeter-launch.log")
         let line = "\(Date()) \(message)\n"
-        if let data = line.data(using: .utf8) {
+        queue.async {
+            let url = URL(fileURLWithPath: "/tmp/UsageMeter-launch.log")
+            guard let data = line.data(using: .utf8) else { return }
             if FileManager.default.fileExists(atPath: url.path),
                let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }
@@ -201,6 +224,104 @@ enum LaunchDiagnostics {
                 try? data.write(to: url)
             }
         }
+    }
+}
+
+/// Detects a hung main thread and captures a stack sample the moment it happens.
+/// The UI freeze users hit is intermittent and can't be reproduced on demand, so
+/// this leaves hard evidence (a `sample` of every thread) in
+/// `~/Library/Logs/UsageMeter/` for the next occurrence instead of guesswork.
+final class MainThreadWatchdog: @unchecked Sendable {
+    static let logDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/UsageMeter")
+
+    private let checkQueue = DispatchQueue(label: "io.github.PolymerTheory.UsageMeter.watchdog")
+    private let lock = NSLock()
+    private var lastBeat = Date()
+    private var mainTimer: Timer?
+    private var checkTimer: DispatchSourceTimer?
+    private var stalled = false
+    private var stallStarted = Date()
+    private var lastCheck = Date()
+    private let threshold: TimeInterval
+
+    init(stallThreshold: TimeInterval = 6) { self.threshold = stallThreshold }
+
+    func start() {
+        try? FileManager.default.createDirectory(at: Self.logDir, withIntermediateDirectories: true)
+
+        // Heartbeat on the main run loop (common modes so it keeps ticking even
+        // during menu/popover tracking). If the main thread hangs, this stops.
+        let beat = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock(); self.lastBeat = Date(); self.lock.unlock()
+        }
+        RunLoop.main.add(beat, forMode: .common)
+        mainTimer = beat
+
+        // Independent checker on a background queue — unaffected by a main hang.
+        let timer = DispatchSource.makeTimerSource(queue: checkQueue)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in self?.check() }
+        timer.resume()
+        checkTimer = timer
+        append("watchdog started (threshold \(Int(threshold))s)")
+    }
+
+    private func check() {
+        let now = Date()
+        // If this background checker was itself suspended (its own interval ran
+        // long), the whole system was likely asleep — not a main-thread hang.
+        // Reset and skip so we don't log a false stall on wake.
+        let checkGap = now.timeIntervalSince(lastCheck)
+        lastCheck = now
+        if checkGap > threshold {
+            lock.lock(); lastBeat = now; lock.unlock()
+            stalled = false
+            return
+        }
+
+        lock.lock(); let beat = lastBeat; lock.unlock()
+        let gap = now.timeIntervalSince(beat)
+        if gap > threshold {
+            if !stalled {
+                stalled = true
+                stallStarted = Date().addingTimeInterval(-gap)
+                append("MAIN THREAD STALL: unresponsive ~\(Int(gap))s — capturing sample")
+                captureSample()
+            }
+        } else if stalled {
+            stalled = false
+            append("main thread RECOVERED after ~\(Int(Date().timeIntervalSince(stallStarted)))s")
+        }
+    }
+
+    private func captureSample() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let out = Self.logDir.appendingPathComponent("hang-\(Self.fileStamp()).txt")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+        // Sampling reads all threads via the kernel, so it works even while the
+        // main thread is wedged; run from this bg queue and don't block on it.
+        p.arguments = [String(pid), "4", "-file", out.path, "-mayDie"]
+        try? p.run()
+    }
+
+    private func append(_ line: String) {
+        let url = Self.logDir.appendingPathComponent("hangs.log")
+        guard let data = "\(Self.fileStamp()) \(line)\n".data(using: .utf8) else { return }
+        if let h = try? FileHandle(forWritingTo: url) {
+            defer { try? h.close() }
+            _ = try? h.seekToEnd(); try? h.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    private static func fileStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return f.string(from: Date())
     }
 }
 
