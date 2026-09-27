@@ -32,6 +32,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         LaunchDiagnostics.write("applicationDidFinishLaunching")
         NSApp.setActivationPolicy(.accessory)
 
+        // Raise the open-file-descriptor soft limit well above the 256 default.
+        // Belt-and-suspenders with the keychain-subprocess leak fix: even if
+        // some future path leaks descriptors slowly, the app has huge headroom
+        // before it could become unresponsive, and it stays diagnosable.
+        var fdLimit = rlimit()
+        if getrlimit(RLIMIT_NOFILE, &fdLimit) == 0 {
+            fdLimit.rlim_cur = min(rlim_t(8192), fdLimit.rlim_max)
+            _ = setrlimit(RLIMIT_NOFILE, &fdLimit)
+        }
+
         activityToken = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "Keep AI usage meter current"
@@ -243,6 +253,8 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private var stalled = false
     private var stallStarted = Date()
     private var lastCheck = Date()
+    private var checkTick = 0
+    private var fdWarned = false
     private let threshold: TimeInterval
 
     init(stallThreshold: TimeInterval = 6) { self.threshold = stallThreshold }
@@ -293,6 +305,24 @@ final class MainThreadWatchdog: @unchecked Sendable {
         } else if stalled {
             stalled = false
             append("main thread RECOVERED after ~\(Int(Date().timeIntervalSince(stallStarted)))s")
+        }
+
+        // ~ every minute, watch the open file-descriptor count. A slow leak
+        // (like the keychain-subprocess one that froze the app after ~19 days)
+        // shows up here long before it becomes fatal.
+        checkTick += 1
+        if checkTick % 30 == 0 { checkFileDescriptors() }
+    }
+
+    private func checkFileDescriptors() {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd") else { return }
+        let count = entries.count
+        if count > 200, !fdWarned {
+            fdWarned = true
+            append("FD LEAK WARNING: \(count) open descriptors — capturing sample")
+            captureSample()
+        } else if count < 150 {
+            fdWarned = false   // re-arm once it recovers
         }
     }
 

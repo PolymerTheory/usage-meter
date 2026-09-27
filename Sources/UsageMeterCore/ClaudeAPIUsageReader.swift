@@ -226,37 +226,77 @@ public struct ClaudeAPIUsageReader {
         return Self.credentials(from: data, source: .file)
     }
 
+    // Process-wide backoff for the `security` fallback. When it wedges on a
+    // background keychain-access prompt, skip it for a while instead of spawning
+    // (and killing) a new one on every poll.
+    private static let keychainLock = NSLock()
+    private static var keychainRetryAfter: Date?
+    private static let keychainBackoff: TimeInterval = 5 * 60
+
+    private static func keychainCoolingDown() -> Bool {
+        keychainLock.lock(); defer { keychainLock.unlock() }
+        if let until = keychainRetryAfter, Date() < until { return true }
+        return false
+    }
+
+    private static func noteKeychainWedge() {
+        keychainLock.lock(); defer { keychainLock.unlock() }
+        keychainRetryAfter = Date().addingTimeInterval(keychainBackoff)
+    }
+
     private func loadCredentialsFromKeychain() -> ClaudeCredentials? {
+        if Self.keychainCoolingDown() { return nil }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", Self.keychainService, "-w"]
 
         let output = Pipe()
+        let errorPipe = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = errorPipe
+
+        // Signal completion from the process's own termination handler rather
+        // than parking a dedicated thread in waitUntilExit(). The previous
+        // design leaked that thread AND this process's pipe fds whenever
+        // `security` blocked on a keychain-access prompt: terminate() (SIGTERM)
+        // didn't reliably kill it, so the waiter never returned. Over weeks that
+        // exhausted GCD's 64-thread global pool and the file-descriptor limit,
+        // freezing the whole app. Now every call is bounded and fully cleaned up.
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+
+        // Close both ends of both pipes so no descriptor can leak on any path.
+        func closePipes() {
+            for pipe in [output, errorPipe] {
+                try? pipe.fileHandleForReading.close()
+                try? pipe.fileHandleForWriting.close()
+            }
+        }
 
         do {
             try process.run()
         } catch {
+            closePipes()
             return nil
         }
 
-        let wait = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
-            process.waitUntilExit()
-            wait.signal()
-        }
-
-        guard wait.wait(timeout: .now() + 2) == .success else {
-            process.terminate()
+        if finished.wait(timeout: .now() + 2) != .success {
+            // Wedged (almost always a background keychain prompt). SIGKILL so
+            // it's reaped promptly, release our fds, and back off future calls.
+            kill(process.processIdentifier, SIGKILL)
+            closePipes()
+            Self.noteKeychainWedge()
             return nil
         }
 
         guard process.terminationStatus == 0 else {
+            closePipes()
             return nil
         }
 
         let data = output.fileHandleForReading.readDataToEndOfFile()
+        closePipes()
         return Self.credentials(from: data, source: .keychain)
     }
 
