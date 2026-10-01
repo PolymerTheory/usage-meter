@@ -1391,63 +1391,61 @@ enum MeterIconRenderer {
         let barCount = max(providers.count * 2, 1)
 
         let size = NSSize(width: width(forBars: barCount), height: 18)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.clear.setFill()
-        NSRect(origin: .zero, size: size).fill()
 
-        let baseline: CGFloat = 2.0
-        let maxHeight: CGFloat = 14.0
+        // Block-based drawing (vs the older lockFocus() baked bitmap): the menu
+        // bar re-invokes this at the right scale as it composites. macOS 26
+        // (Tahoe) redrew the menu bar and a baked bitmap could come out blank;
+        // the drawing handler renders correctly in the new pipeline.
+        let image = NSImage(size: size, flipped: false) { _ in
+            let baseline: CGFloat = 2.0
+            let maxHeight: CGFloat = 14.0
 
-        func barX(_ index: Int) -> CGFloat { leftPad + CGFloat(index) * (barWidth + gap) }
+            func barX(_ index: Int) -> CGFloat { leftPad + CGFloat(index) * (barWidth + gap) }
 
-        // Nothing enabled: draw a single neutral stub so the item stays visible
-        // and clickable; the popover explains how to turn a provider back on.
-        if providers.isEmpty {
-            let rect = NSRect(x: barX(0), y: baseline, width: barWidth, height: 3)
-            NSColor.systemGray.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
-            image.unlockFocus()
-            image.isTemplate = false
-            return image
-        }
-
-        var barIndex = 0
-        for provider in providers {
-            for window in [provider.shortWindow, provider.longWindow] {
-                let v = value(window)
-                // An unknown window (nil) renders as a short gray stub so the
-                // user can tell quota data is missing rather than reading it as
-                // "empty".
-                let height = v.map { max(2, maxHeight * CGFloat($0)) } ?? 3
-                let rect = NSRect(x: barX(barIndex), y: baseline, width: barWidth, height: height)
-                color(for: v, colors: colors).setFill()
+            // Nothing enabled: a single neutral stub so the item stays visible
+            // and clickable; the popover explains how to turn a provider on.
+            if providers.isEmpty {
+                let rect = NSRect(x: barX(0), y: baseline, width: barWidth, height: 3)
+                NSColor.systemGray.setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
-                barIndex += 1
+                return true
             }
-        }
 
-        // Activity dots: a small filled circle at the base of each provider's
-        // bar pair when that provider has written session logs recently.
-        let dotY: CGFloat = 0.4
-        let dotR: CGFloat = 1.25
-        for (p, provider) in providers.enumerated() where provider.isActive {
-            let x0 = barX(p * 2)
-            let x1 = barX(p * 2 + 1) + barWidth
-            let cx = (x0 + x1) / 2
-            let dotRect = NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)
-            let dot = NSBezierPath(ovalIn: dotRect)
-            // White fill with a dark outline so the dot stays visible on ANY
-            // menu-bar background — light, dark, or a live/changing wallpaper —
-            // without the app needing to sample the pixels behind it.
-            NSColor.white.setFill()
-            dot.fill()
-            NSColor.black.withAlphaComponent(0.7).setStroke()
-            dot.lineWidth = 0.75
-            dot.stroke()
-        }
+            var barIndex = 0
+            for provider in providers {
+                for window in [provider.shortWindow, provider.longWindow] {
+                    let v = value(window)
+                    // An unknown window (nil) renders as a short gray stub so the
+                    // user can tell quota data is missing rather than reading it
+                    // as "empty".
+                    let height = v.map { max(2, maxHeight * CGFloat($0)) } ?? 3
+                    let rect = NSRect(x: barX(barIndex), y: baseline, width: barWidth, height: height)
+                    color(for: v, colors: colors).setFill()
+                    NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+                    barIndex += 1
+                }
+            }
 
-        image.unlockFocus()
+            // Activity dots: a small filled circle at the base of each provider's
+            // bar pair when that provider has written session logs recently.
+            let dotY: CGFloat = 0.4
+            let dotR: CGFloat = 1.25
+            for (p, provider) in providers.enumerated() where provider.isActive {
+                let x0 = barX(p * 2)
+                let x1 = barX(p * 2 + 1) + barWidth
+                let cx = (x0 + x1) / 2
+                let dotRect = NSRect(x: cx - dotR, y: dotY, width: dotR * 2, height: dotR * 2)
+                let dot = NSBezierPath(ovalIn: dotRect)
+                // White fill with a dark outline so the dot stays visible on ANY
+                // menu-bar background — light, dark, or a live/changing wallpaper.
+                NSColor.white.setFill()
+                dot.fill()
+                NSColor.black.withAlphaComponent(0.7).setStroke()
+                dot.lineWidth = 0.75
+                dot.stroke()
+            }
+            return true
+        }
         image.isTemplate = false
         return image
     }
