@@ -55,6 +55,10 @@ if [[ ! -f "$SPARKLE_ROOT/LICENSE" ]]; then
   exit 1
 fi
 cp "$SPARKLE_ROOT/LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
+# App icon. Menu-bar managers (e.g. Bartender) display the app's icon for its
+# status item, so without one UsageMeter shows up as a blank square.
+# Regenerate with: python script/make_icon.py
+cp "$ROOT_DIR/script/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -64,6 +68,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleExecutable</key>
   <string>UsageMeter</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.PolymerTheory.UsageMeter</string>
   <key>CFBundleName</key>
