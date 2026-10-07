@@ -72,6 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         )
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Force the item visible. macOS persists NSStatusItem visibility per
+        // item, and it can get stuck off (e.g. the OS hiding an item when the
+        // bar was briefly full, or a menu-bar manager toggling it) — which
+        // leaves the app running and configuring a button that never appears in
+        // the menu bar (no AXExtrasMenuBar). Setting this explicitly on launch
+        // overrides any stale persisted/forced-off state.
+        statusItem.isVisible = true
         configureStatusButton(with: .empty)
 
         popover.behavior = .applicationDefined   // we manage dismissal manually
@@ -143,6 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Size the menu-bar item to the icon so it shrinks when only one
         // provider is shown (2 bars) rather than reserving room for four.
         statusItem.length = icon.size.width + 6
+        // Keep it visible — defensive against anything flipping it off at runtime.
+        if !statusItem.isVisible { statusItem.isVisible = true }
         let activeProviders = snapshot.providers
             .filter(\.isActive)
             .map { $0.provider.rawValue }
