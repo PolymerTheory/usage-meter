@@ -52,7 +52,15 @@
             android:text="@string/icon_style_summary"
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:textColor="?android:attr/textColorSecondary"
-            android:layout_marginBottom="20dp" />
+            android:layout_marginBottom="12dp" />
+
+        <!-- Filled in code by AppearanceSettings: colours, thresholds, backgrounds. -->
+        <LinearLayout
+            android:id="@+id/customize_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="24dp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/scan_button"

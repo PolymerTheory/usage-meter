@@ -23,8 +23,29 @@ never tokens. So:
 ## The four bars
 
 Same as the Mac menu bar, left to right: **Codex 5h · Codex 7d · Claude 5h ·
-Claude 7d**. Colours match the Mac / phone view: green `< 55%`, yellow `< 80%`,
-red `≥ 80%`, grey when a window is unavailable.
+Claude 7d**. Default colours match the Mac / phone view: green `< 55%`, yellow
+`< 80%`, red `≥ 80%`, grey when a window is unavailable.
+
+**Reset countdowns:** when the detailed card is tall enough, each bar shows the
+time until its window resets (`45m`, `3h12m`, `2d4h`). Once a window's reset time
+passes it is drawn as **0** (labelled `reset`) instead of the stale pre-reset
+percentage, until the Mac publishes a new reading. Readings more than 3 hours old
+are drawn dimmed (the Mac is probably asleep).
+
+## Customize
+
+The app's **Customize** section changes, everywhere at once (app + widget):
+
+- **Bar colors** (Low / Medium / High) and the two thresholds where they switch
+  (*Medium from N%*, *High from N%*).
+- **App background** for light and dark mode separately.
+- **Widget background**: the card (light / dark mode) and the compact icon.
+  Widget text automatically picks light or dark ink to stay readable.
+
+Each colour has a palette plus a hex field; backgrounds also offer **Default**.
+**Restore defaults** resets everything. Settings are stored apart from the sync
+credentials and are included in Android backup; the sync URL + token are
+excluded from Google cloud backup.
 
 **Two styles**, switched with the **Compact icon style** toggle in the app:
 

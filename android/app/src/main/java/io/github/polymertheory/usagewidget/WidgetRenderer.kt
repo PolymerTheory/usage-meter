@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import io.github.polymertheory.usagewidget.config.Appearance
 import io.github.polymertheory.usagewidget.model.Usage
 import io.github.polymertheory.usagewidget.model.UsageWindow
 import kotlin.math.max
@@ -22,35 +23,28 @@ enum class WidgetStyle {
 
 /**
  * Draws the UsageMeter four-bar glyph into a bitmap sized to the widget cell.
- * Colours and thresholds match docs/phone.html so the phone matches the Mac.
- *   green < 55%, yellow < 80%, red >= 80%, grey = unavailable.
- * Small cells show bars only (icon-like); larger cells add percentages,
- * window labels, and an "updated" line.
+ * Bar colours, thresholds and backgrounds come from the user's [Appearance]
+ * (defaults match the Mac app: green < 55%, yellow < 80%, red >= 80%).
+ * Small cells show bars only; larger cells add percentages, window labels,
+ * reset countdowns and an "updated" line.
  */
 object WidgetRenderer {
 
-    private data class Bar(val group: String, val label: String, val window: UsageWindow?)
+    private data class Bar(val label: String, val window: UsageWindow?, val updatedAtMs: Long?)
 
-    private const val CARD_DARK = 0xFF151B23.toInt()
-    private const val CARD_LIGHT = 0xFFFFFFFF.toInt()
-    private const val TEXT_DARK = 0xFFE7EDF3.toInt()
-    private const val TEXT_LIGHT = 0xFF1A2230.toInt()
-    private const val MUTED_DARK = 0xFF8B97A5.toInt()
-    private const val MUTED_LIGHT = 0xFF66707D.toInt()
-    private const val TRACK_DARK = 0xFF263140.toInt()
-    private const val TRACK_LIGHT = 0xFFE3E8EE.toInt()
+    private const val TEXT_ON_DARK = 0xFFE7EDF3.toInt()
+    private const val TEXT_ON_LIGHT = 0xFF1A2230.toInt()
+    private const val MUTED_ON_DARK = 0xFF8B97A5.toInt()
+    private const val MUTED_ON_LIGHT = 0xFF66707D.toInt()
+    private const val TRACK_ON_DARK = 0xFF263140.toInt()
+    private const val TRACK_ON_LIGHT = 0xFFE3E8EE.toInt()
 
-    private const val GREEN = 0xFF34C759.toInt()
-    private const val YELLOW = 0xFFFFCC00.toInt()
-    private const val RED = 0xFFFF3B30.toInt()
-    private const val GRAY = 0xFF5B6673.toInt()
+    /** Readings older than this are drawn dimmed: the Mac may be asleep/offline. */
+    private const val STALE_AFTER_MS = 3 * 60 * 60 * 1000L
+    private const val STALE_ALPHA = 0x66
 
-    fun colorFor(percent: Double?): Int = when {
-        percent == null -> GRAY
-        percent < 55 -> GREEN
-        percent < 80 -> YELLOW
-        else -> RED
-    }
+    /** Kept for callers that only need the default palette. */
+    fun colorFor(percent: Double?): Int = Appearance().colorFor(percent)
 
     fun render(
         usage: Usage?,
@@ -60,6 +54,8 @@ object WidgetRenderer {
         dark: Boolean,
         style: WidgetStyle = WidgetStyle.CARD,
         statusText: String? = null,
+        appearance: Appearance = Appearance(),
+        nowMs: Long = System.currentTimeMillis(),
     ): Bitmap {
         val w = max(widthPx, 1)
         val h = max(heightPx, 1)
@@ -67,74 +63,75 @@ object WidgetRenderer {
         val canvas = Canvas(bmp)
         fun dp(v: Float) = v * density
 
+        val codexAt = usage?.codex?.updatedAtEpochMs ?: usage?.updatedAtEpochMs
+        val claudeAt = usage?.claude?.updatedAtEpochMs ?: usage?.updatedAtEpochMs
         val bars = listOf(
-            Bar("Codex", "5h", usage?.codex?.short),
-            Bar("Codex", "7d", usage?.codex?.long),
-            Bar("Claude", "5h", usage?.claude?.short),
-            Bar("Claude", "7d", usage?.claude?.long),
+            Bar("5h", usage?.codex?.short, codexAt),
+            Bar("7d", usage?.codex?.long, codexAt),
+            Bar("5h", usage?.claude?.short, claudeAt),
+            Bar("7d", usage?.claude?.long, claudeAt),
         )
 
         if (style == WidgetStyle.ICON) {
-            drawIcon(canvas, bars, w, h, density)
+            drawIcon(canvas, bars, w, h, density, appearance, nowMs)
             return bmp
         }
 
-        val card = if (dark) CARD_DARK else CARD_LIGHT
-        val textColor = if (dark) TEXT_DARK else TEXT_LIGHT
-        val muted = if (dark) MUTED_DARK else MUTED_LIGHT
-        val track = if (dark) TRACK_DARK else TRACK_LIGHT
+        val card = appearance.widgetBackground(dark)
+        // Pick text colours from the background itself, not the system mode, so a
+        // custom light card in dark mode (or vice versa) stays readable.
+        val onDark = Appearance.isDark(card)
+        val textColor = if (onDark) TEXT_ON_DARK else TEXT_ON_LIGHT
+        val muted = if (onDark) MUTED_ON_DARK else MUTED_ON_LIGHT
+        val track = if (onDark) TRACK_ON_DARK else TRACK_ON_LIGHT
 
-        // Rounded card background.
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = card }
         val radius = dp(18f)
         canvas.drawRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), radius, radius, bg)
 
         // Decide layout richness from available space.
         val compact = h < dp(96f) || w < dp(130f)
-        val showUpdated = !compact && h >= dp(120f)
+        val anyReset = bars.any { it.window?.resetAtEpochMs != null }
+        val showReset = !compact && anyReset && h >= dp(112f)
+        val showUpdated = !compact && h >= dp(if (showReset) 140f else 120f)
 
         val pad = dp(if (compact) 10f else 14f)
-        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = textColor
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = muted }
 
-        var top = pad
+        val top = pad
         var bottom = h - pad
 
-        // Optional footer: "updated Xm ago".
-        if (showUpdated && usage?.updatedAtEpochMs != null) {
+        // Optional footer: "updated Xm ago" (or a setup hint).
+        val footer = when {
+            showUpdated && usage?.updatedAtEpochMs != null -> TimeFormat.agoText(usage.updatedAtEpochMs)
+            statusText != null && !compact -> statusText
+            else -> null
+        }
+        if (footer != null) {
             labelPaint.textSize = dp(10f)
             labelPaint.textAlign = Paint.Align.CENTER
-            val ago = TimeFormat.agoText(usage.updatedAtEpochMs)
-            canvas.drawText(ago, w / 2f, bottom, labelPaint)
-            bottom -= dp(14f)
-        } else if (statusText != null && !compact) {
-            labelPaint.textSize = dp(10f)
-            labelPaint.textAlign = Paint.Align.CENTER
-            canvas.drawText(statusText, w / 2f, bottom, labelPaint)
+            canvas.drawText(footer, w / 2f, bottom, labelPaint)
             bottom -= dp(14f)
         }
 
-        // Percentage row above bars (expanded only).
         val pctSize = dp(11f)
         val labelSize = dp(10f)
+        val resetSize = dp(9f)
         val pctRow = if (compact) 0f else pctSize + dp(4f)
         val labelRow = if (compact) 0f else labelSize + dp(4f)
+        val resetRow = if (showReset) resetSize + dp(3f) else 0f
 
         val barsTop = top + pctRow
-        val barsBottom = bottom - labelRow
+        val barsBottom = bottom - labelRow - resetRow
         val barsHeight = max(barsBottom - barsTop, dp(8f))
 
-        // Bar geometry: four bars evenly spaced across the width.
         val n = bars.size
         val gap = dp(if (compact) 6f else 9f)
         val innerW = w - 2 * pad
         val barW = (innerW - gap * (n - 1)) / n
         val barRadius = min(barW / 2f, dp(4f))
 
-        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = track }
+        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val pctPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -142,8 +139,11 @@ object WidgetRenderer {
             textAlign = Paint.Align.CENTER
         }
         val winPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = muted
             textSize = labelSize
+            textAlign = Paint.Align.CENTER
+        }
+        val resetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = resetSize
             textAlign = Paint.Align.CENTER
         }
 
@@ -152,18 +152,19 @@ object WidgetRenderer {
             val left = pad + i * (barW + gap)
             val right = left + barW
             val cx = (left + right) / 2f
-            val pct = bar.window?.percent
+            val pct = bar.window?.displayPercent(nowMs)
+            val stale = bar.updatedAtMs != null && nowMs - bar.updatedAtMs > STALE_AFTER_MS
+            fun dim(c: Int) = if (stale) withAlpha(c, STALE_ALPHA) else c
 
-            // Track (full height, rounded).
+            trackPaint.color = dim(track)
             canvas.drawRoundRect(RectF(left, barsTop, right, barsBottom), barRadius, barRadius, trackPaint)
 
-            // Fill from the bottom up.
             if (pct != null) {
                 val frac = (pct / 100.0).coerceIn(0.0, 1.0).toFloat()
                 val minVisible = min(barsHeight, dp(4f))
                 val fillH = max(barsHeight * frac, if (frac > 0f) minVisible else 0f)
                 if (fillH > 0f) {
-                    fillPaint.color = colorFor(pct)
+                    fillPaint.color = dim(appearance.colorFor(pct))
                     canvas.drawRoundRect(
                         RectF(left, barsBottom - fillH, right, barsBottom),
                         barRadius, barRadius, fillPaint,
@@ -172,10 +173,24 @@ object WidgetRenderer {
             }
 
             if (!compact) {
-                pctPaint.color = colorFor(pct)
+                pctPaint.color = dim(appearance.colorFor(pct))
                 val pctText = if (pct == null) "–" else "${Math.round(pct)}"
                 canvas.drawText(pctText, cx, barsTop - dp(4f), pctPaint)
-                canvas.drawText(bar.label, cx, barsBottom + labelSize + dp(2f), winPaint)
+                winPaint.color = dim(muted)
+                val labelY = barsBottom + labelSize + dp(2f)
+                canvas.drawText(bar.label, cx, labelY, winPaint)
+
+                if (showReset) {
+                    val maxW = barW + gap * 0.8f
+                    var text = TimeFormat.shortCountdown(bar.window?.resetAtEpochMs)
+                    if (text != null && resetPaint.measureText(text) > maxW) {
+                        text = TimeFormat.shortCountdown(bar.window?.resetAtEpochMs, coarse = true)
+                    }
+                    if (text != null) {
+                        resetPaint.color = dim(if (text == "reset") appearance.lowColor else textColor)
+                        canvas.drawText(text, cx, labelY + resetSize + dp(3f), resetPaint)
+                    }
+                }
             }
         }
 
@@ -183,35 +198,61 @@ object WidgetRenderer {
     }
 
     /**
-     * Draws the four bars inside an app-icon-sized dark squircle with a label
-     * below, transparent everywhere else — so the widget sits in the icon grid
-     * like a live version of the launcher icon.
+     * Draws the four bars inside an app-icon-sized squircle with a label below,
+     * transparent everywhere else — so the widget sits in the icon grid like a
+     * live version of the launcher icon.
      */
-    private fun drawIcon(canvas: Canvas, bars: List<Bar>, w: Int, h: Int, density: Float) {
+    private fun drawIcon(
+        canvas: Canvas,
+        bars: List<Bar>,
+        w: Int,
+        h: Int,
+        density: Float,
+        appearance: Appearance,
+        nowMs: Long,
+    ) {
         fun dp(v: Float) = v * density
         val unit = min(w, h).toFloat()
-        // Match a launcher icon: ~72% of the cell, sitting in the upper area with
-        // its label beneath, so the widget lines up with adjacent app icons.
         val side = unit * 0.72f
         val labelReserve = unit * 0.22f
         val left = (w - side) / 2f
         val top = max(unit * 0.04f, (h - labelReserve - side) / 2f)
         val squircleRadius = side * 0.235f
 
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF0B0F14.toInt() }
+        val iconBg = appearance.iconBackground()
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = iconBg }
         canvas.drawRoundRect(RectF(left, top, left + side, top + side), squircleRadius, squircleRadius, bgPaint)
 
         val padIn = side * 0.17f
-        drawBars(
-            canvas, bars,
-            left = left + padIn,
-            top = top + padIn,
-            right = left + side - padIn,
-            bottom = top + side - padIn,
-            gap = side * 0.06f,
-            maxRadius = dp(3f),
-            trackColor = TRACK_DARK,
-        )
+        val n = bars.size
+        val bLeft = left + padIn
+        val bTop = top + padIn
+        val bRight = left + side - padIn
+        val bBottom = top + side - padIn
+        val gap = side * 0.06f
+        val barW = ((bRight - bLeft) - gap * (n - 1)) / n
+        val barRadius = min(barW / 2f, dp(3f))
+        val height = bBottom - bTop
+        val trackColor = if (Appearance.isDark(iconBg)) TRACK_ON_DARK else TRACK_ON_LIGHT
+        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        for (i in 0 until n) {
+            val bar = bars[i]
+            val stale = bar.updatedAtMs != null && nowMs - bar.updatedAtMs > STALE_AFTER_MS
+            fun dim(c: Int) = if (stale) withAlpha(c, STALE_ALPHA) else c
+            val bl = bLeft + i * (barW + gap)
+            val br = bl + barW
+            trackPaint.color = dim(trackColor)
+            canvas.drawRoundRect(RectF(bl, bTop, br, bBottom), barRadius, barRadius, trackPaint)
+            val pct = bar.window?.displayPercent(nowMs) ?: continue
+            val frac = (pct / 100.0).coerceIn(0.0, 1.0).toFloat()
+            val minVisible = min(height, barRadius * 2f)
+            val fillH = max(height * frac, if (frac > 0f) minVisible else 0f)
+            if (fillH > 0f) {
+                fillPaint.color = dim(appearance.colorFor(pct))
+                canvas.drawRoundRect(RectF(bl, bBottom - fillH, br, bBottom), barRadius, barRadius, fillPaint)
+            }
+        }
 
         // Label below the squircle, styled like a launcher icon label.
         val labelSize = unit * 0.13f
@@ -228,38 +269,6 @@ object WidgetRenderer {
         }
     }
 
-    /** Draws n track+fill bars filling the given rect. No text. */
-    private fun drawBars(
-        canvas: Canvas,
-        bars: List<Bar>,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-        gap: Float,
-        maxRadius: Float,
-        trackColor: Int,
-    ) {
-        val n = bars.size
-        val innerW = right - left
-        val barW = (innerW - gap * (n - 1)) / n
-        val barRadius = min(barW / 2f, maxRadius)
-        val height = bottom - top
-        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = trackColor }
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        for (i in 0 until n) {
-            val bl = left + i * (barW + gap)
-            val br = bl + barW
-            canvas.drawRoundRect(RectF(bl, top, br, bottom), barRadius, barRadius, trackPaint)
-            val pct = bars[i].window?.percent ?: continue
-            val frac = (pct / 100.0).coerceIn(0.0, 1.0).toFloat()
-            val minVisible = min(height, barRadius * 2f)
-            val fillH = max(height * frac, if (frac > 0f) minVisible else 0f)
-            if (fillH > 0f) {
-                fillPaint.color = colorFor(pct)
-                canvas.drawRoundRect(RectF(bl, bottom - fillH, br, bottom), barRadius, barRadius, fillPaint)
-            }
-        }
-    }
-
+    private fun withAlpha(color: Int, alpha: Int): Int =
+        (color and 0x00FFFFFF) or ((alpha * Color.alpha(color) / 255) shl 24)
 }

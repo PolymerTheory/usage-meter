@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import android.widget.RemoteViews
+import io.github.polymertheory.usagewidget.config.AppearanceStore
 import io.github.polymertheory.usagewidget.config.ConfigActivity
 import io.github.polymertheory.usagewidget.config.ConfigStore
 import io.github.polymertheory.usagewidget.work.RefreshScheduler
@@ -73,7 +74,8 @@ class UsageWidgetProvider : AppWidgetProvider() {
             }
 
             val style = if (ConfigStore.iconStyle(context)) WidgetStyle.ICON else WidgetStyle.CARD
-            val bitmap = WidgetRenderer.render(usage, wPx, hPx, density, dark, style, status)
+            val appearance = AppearanceStore.load(context)
+            val bitmap = WidgetRenderer.render(usage, wPx, hPx, density, dark, style, status, appearance)
 
             val views = RemoteViews(context.packageName, R.layout.widget_usage)
             views.setImageViewBitmap(R.id.widget_image, bitmap)

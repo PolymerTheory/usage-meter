@@ -26,7 +26,14 @@ class RefreshWorker(context: Context, params: WorkerParameters) :
         UsageWidgetProvider.updateAll(applicationContext)
         return when (result) {
             is FetchResult.Ok -> Result.success()
-            is FetchResult.Error -> Result.retry()
+            // Retrying can't fix a missing config or a rejected token — it just
+            // burns battery with exponential backoff. Let the next period try.
+            is FetchResult.Error ->
+                if (result.message == "not configured" || result.message.startsWith("token rejected")) {
+                    Result.failure()
+                } else {
+                    Result.retry()
+                }
         }
     }
 }

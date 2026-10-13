@@ -13,7 +13,19 @@ data class UsageWindow(
     val label: String,
     val percent: Double?,
     val resetAtEpochMs: Long?,
-)
+) {
+    /**
+     * True once the window's reset time has passed. The blob is only as fresh as
+     * the Mac's last publish, so a reading like "Claude 5h 93%" is meaningless
+     * after that window has rolled over — usage has restarted from zero.
+     */
+    fun hasReset(nowMs: Long = System.currentTimeMillis()): Boolean =
+        resetAtEpochMs != null && nowMs >= resetAtEpochMs
+
+    /** The percent to display: 0 after a reset we haven't been told about yet. */
+    fun displayPercent(nowMs: Long = System.currentTimeMillis()): Double? =
+        if (percent != null && hasReset(nowMs)) 0.0 else percent
+}
 
 data class UsageProvider(
     val short: UsageWindow,

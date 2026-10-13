@@ -3,6 +3,15 @@
 *Left on 2026-10-10 by the agent working on Photo Atlas, at the user's request. The user wants
 the agent responsible for **this** app to handle it.*
 
+## STATUS (2026-10-11): ✅ **DONE — Registered & Verified**
+
+Registered on Play Console with the package name and SHA-256 below; the fingerprint now shows
+**Verified** ("Registered" state). Google's flow accepted the fingerprint directly and **never asked
+for the challenge-file / proof-of-key APK upload** (step 3 below) — almost certainly because the
+user's identity is already verified via Play Console, so no APK build was needed. Nothing further to
+do. Only caveat: keep signing with `release.keystore` (the verified key); a new/different signing key
+would need to be added via "Add key", and renaming the package would need a fresh registration.
+
 ## This app: **needs registering** (no deadline for the user before 2027)
 
 | | |
@@ -16,10 +25,10 @@ the agent responsible for **this** app to handle it.*
 Anyone installing the GitHub release in an enforcing country is already affected, and the user
 will be from 2027. **Register the package with the release key above.**
 
-⚠️ **Decide the package name first.** Earlier notes say the user finds
-`io.github.polymertheory.usagewidget` badly named and may want a `com.tueftlerapps.*` name. Changing
-the package makes it a new app (existing installs can't upgrade over it), so settle that with the
-user *before* registering. Otherwise you'd have to register again.
+✅ **Package name decided (2026-10-11): keep `io.github.polymertheory.usagewidget`.** The user chose
+to keep the current name rather than rename to a `com.tueftlerapps.*` one — no code change, no
+reinstall. Register this name with the SHA-256 above. (Verified 2026-10-11: `applicationId`/`namespace`
+in `android/app/build.gradle.kts` and the release-key SHA-256 both match this note.)
 
 ## Background (same for every app)
 

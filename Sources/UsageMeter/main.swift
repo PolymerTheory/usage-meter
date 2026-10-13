@@ -234,6 +234,14 @@ enum LaunchDiagnostics {
         queue.async {
             let url = URL(fileURLWithPath: "/tmp/UsageMeter-launch.log")
             guard let data = line.data(using: .utf8) else { return }
+            // Every icon redraw logs a line (~2.6 MB per 6 days of uptime), so
+            // keep only the most recent ~1 MB: rotate to .1 when it grows past.
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int,
+               size > 1_000_000 {
+                let old = URL(fileURLWithPath: url.path + ".1")
+                try? FileManager.default.removeItem(at: old)
+                try? FileManager.default.moveItem(at: url, to: old)
+            }
             if FileManager.default.fileExists(atPath: url.path),
                let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }

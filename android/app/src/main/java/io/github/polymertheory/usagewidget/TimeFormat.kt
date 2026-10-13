@@ -25,11 +25,32 @@ object TimeFormat {
         }
     }
 
-    /** "resets 9:05 (2h 15m)" / "resets Mon 9:05 (3d 2h)" / "resetting…" / "reset unknown". */
+    /**
+     * Compact countdown for the widget, where each bar is narrow: "45m", "3h12m",
+     * "2d4h"; "reset" once passed; null when unknown. [coarse] drops the second
+     * unit ("3h", "2d") for very narrow bars.
+     */
+    fun shortCountdown(resetAtEpochMs: Long?, coarse: Boolean = false): String? {
+        if (resetAtEpochMs == null) return null
+        val seconds = (resetAtEpochMs - System.currentTimeMillis()) / 1000
+        if (seconds <= 0) return "reset"
+        val minutes = seconds / 60
+        val hours = seconds / 3600
+        val days = hours / 24
+        return when {
+            days >= 1 -> if (coarse) "${days}d" else "${days}d${hours - days * 24}h"
+            hours >= 1 -> if (coarse) "${hours}h" else "${hours}h${minutes - hours * 60}m"
+            else -> "${maxOf(minutes, 1)}m"
+        }
+    }
+
+    /** "resets 9:05 (2h 15m)" / "resets Mon 9:05 (3d 2h)" / "reset — awaiting update" / "reset unknown". */
     fun resetLabel(resetAtEpochMs: Long?): String {
         if (resetAtEpochMs == null) return "reset unknown"
         val seconds = (resetAtEpochMs - System.currentTimeMillis()) / 1000
-        if (seconds <= 0) return "resetting…"
+        // The window has rolled over but the Mac hasn't published a new reading
+        // yet, so we know usage restarted but not by how much since.
+        if (seconds <= 0) return "reset — awaiting update"
 
         val totalMinutes = seconds / 60
         val hours = seconds / 3600

@@ -85,7 +85,24 @@ class ConfigActivity : AppCompatActivity() {
             UsageWidgetProvider.updateAll(this)
         }
 
+        originalRootBg = binding.root.background
+        AppearanceSettings(this, binding.customizeContainer) { appearance, widgetToo ->
+            applyAppBackground(appearance)
+            renderUsage()
+            if (widgetToo) UsageWidgetProvider.updateAll(this)
+        }.build()
+        applyAppBackground(AppearanceStore.load(this))
+
         renderUsage()
+    }
+
+    private var originalRootBg: android.graphics.drawable.Drawable? = null
+
+    /** Custom background for the current light/dark mode, or the theme default. */
+    private fun applyAppBackground(appearance: Appearance) {
+        val custom = appearance.appBackground(AppearanceSettings.isNight(this))
+        if (custom != null) binding.root.setBackgroundColor(custom)
+        else binding.root.background = originalRootBg
     }
 
     override fun onResume() {
@@ -98,7 +115,10 @@ class ConfigActivity : AppCompatActivity() {
                     renderUsage(r.usage)
                     UsageWidgetProvider.updateAll(this@ConfigActivity)
                 }
-                is FetchResult.Error -> { /* keep showing cached usage */ }
+                // Keep showing cached usage, but say so — silently showing old
+                // numbers looked identical to fresh ones.
+                is FetchResult.Error ->
+                    binding.status.text = "Couldn’t refresh (${r.message}) — showing last known."
             }
         }
     }
@@ -156,7 +176,8 @@ class ConfigActivity : AppCompatActivity() {
     }
 
     private fun renderUsage(usage: Usage? = UsageRepository.cached(this)) {
-        UsageDetailRenderer.bind(binding.codexCard, "Codex", usage?.codex)
-        UsageDetailRenderer.bind(binding.claudeCard, "Claude", usage?.claude)
+        val appearance = AppearanceStore.load(this)
+        UsageDetailRenderer.bind(binding.codexCard, "Codex", usage?.codex, appearance)
+        UsageDetailRenderer.bind(binding.claudeCard, "Claude", usage?.claude, appearance)
     }
 }
