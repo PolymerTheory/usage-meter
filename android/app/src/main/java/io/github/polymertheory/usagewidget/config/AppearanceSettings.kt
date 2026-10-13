@@ -127,6 +127,7 @@ class AppearanceSettings(
         valueFrom = from
         valueTo = to
         stepSize = 1f
+        isTickVisible = false // 1% steps would draw ~100 dots along the track
         this.value = value.coerceIn(from, to)
         addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
             override fun onStartTrackingTouch(slider: Slider) {}
