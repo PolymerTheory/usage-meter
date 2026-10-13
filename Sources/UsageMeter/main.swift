@@ -344,14 +344,32 @@ final class MainThreadWatchdog: @unchecked Sendable {
     }
 
     private func captureSample() {
-        let pid = ProcessInfo.processInfo.processIdentifier
         let out = Self.logDir.appendingPathComponent("hang-\(Self.fileStamp()).txt")
+        // Record the capture's fate in hangs.log. One stall (2026-09-07) logged
+        // "capturing sample" but left no report, and the path checks out in
+        // every test (incl. under launchd and when the app dies mid-capture),
+        // so make any future miss explain itself instead of guessing.
+        Self.spawnSample(to: out, onLaunchFailure: { [weak self] error in
+            self?.append("sample capture FAILED to launch: \(error)")
+        }, onExit: { [weak self] status in
+            let written = FileManager.default.fileExists(atPath: out.path)
+            self?.append("sample exited (status \(status)); report \(written ? "written: \(out.lastPathComponent)" : "MISSING")")
+        })
+    }
+
+    /// Spawns `/usr/bin/sample` on this process, writing to [out]. Sampling
+    /// reads all threads via the kernel, so it works while the main thread is
+    /// wedged; call from a background queue and don't block on it.
+    static func spawnSample(
+        to out: URL,
+        onLaunchFailure: ((Error) -> Void)? = nil,
+        onExit: ((Int32) -> Void)? = nil
+    ) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-        // Sampling reads all threads via the kernel, so it works even while the
-        // main thread is wedged; run from this bg queue and don't block on it.
-        p.arguments = [String(pid), "4", "-file", out.path, "-mayDie"]
-        try? p.run()
+        p.arguments = [String(ProcessInfo.processInfo.processIdentifier), "4", "-file", out.path, "-mayDie"]
+        if let onExit { p.terminationHandler = { onExit($0.terminationStatus) } }
+        do { try p.run() } catch { onLaunchFailure?(error) }
     }
 
     private func append(_ line: String) {
@@ -432,6 +450,20 @@ enum UsageMeterMain {
                 fputs("Failed to install LaunchAgent: \(error)\n", stderr)
             }
             return true
+        }
+
+        // Hidden self-test for the hang watchdog's capture path: spawns the
+        // same `sample` the watchdog uses on this very process while the main
+        // thread is blocked, then reports whether a report file appeared. Run
+        // it under launchd (launchctl submit) to reproduce the real app context.
+        if arguments.first == "--watchdog-selftest", arguments.count == 2 {
+            let out = URL(fileURLWithPath: arguments[1])
+            try? FileManager.default.removeItem(at: out)
+            DispatchQueue.global().async { MainThreadWatchdog.spawnSample(to: out) }
+            Thread.sleep(forTimeInterval: 15)
+            let ok = FileManager.default.fileExists(atPath: out.path)
+            print("watchdog-selftest: report \(ok ? "WRITTEN" : "MISSING") at \(out.path)")
+            exit(ok ? 0 : 1)
         }
 
         if arguments == ["--diagnose"] {

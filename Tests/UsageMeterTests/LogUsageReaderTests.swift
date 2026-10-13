@@ -720,6 +720,17 @@ final class LogUsageReaderTests: XCTestCase {
         XCTAssertEqual(reader.isActive(now: Date(timeIntervalSince1970: 202)), false)
     }
 
+    /// A normal interactive `claude login` gives hooks only the scopes, never the
+    /// token — so capture must be a no-op there (credentials then come from the
+    /// Claude Code keychain item). Only `claude setup-token` users get a token.
+    func testClaudeHookCredentialCaptureIgnoresScopesOnlyEnvironment() {
+        XCTAssertNil(ClaudeHookCredentialCapture.credentialPayload(
+            from: ["CLAUDE_CODE_OAUTH_SCOPES": "user:profile user:inference"],
+            now: Date()
+        ))
+        XCTAssertNil(ClaudeHookCredentialCapture.credentialPayload(from: [:], now: Date()))
+    }
+
     func testClaudeHookCredentialCaptureBuildsPayloadFromEnvironment() throws {
         let data = try XCTUnwrap(
             ClaudeHookCredentialCapture.credentialPayload(

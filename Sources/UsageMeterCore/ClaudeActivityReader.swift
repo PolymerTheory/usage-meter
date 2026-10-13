@@ -65,6 +65,18 @@ public enum ActivityStatusWriter {
     }
 }
 
+/// Captures Claude credentials from the environment Claude Code gives its hooks
+/// and stores them in UsageMeter's own keychain item ("UsageMeter-Claude-OAuth").
+///
+/// NOT DEAD CODE — even though it never fires on a typical install. Checked
+/// 2026-10-13: with a normal interactive `claude login`, hooks run constantly but
+/// receive only `CLAUDE_CODE_OAUTH_SCOPES`, never the token, so this is a no-op
+/// and credentials come from the "Claude Code-credentials" keychain item via the
+/// `security` CLI fallback instead. It *is* live for users who authenticate with
+/// a long-lived token (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`, or the
+/// `…_TOKEN_FILE_DESCRIPTOR` form used by managed environments). Those users have
+/// no keychain item and no ~/.claude/.credentials.json, so this capture is
+/// their ONLY credential source. Do not remove without replacing that path.
 public enum ClaudeHookCredentialCapture {
     public static let keychainService = "UsageMeter-Claude-OAuth"
     private static let tokenLifetime: TimeInterval = 55 * 60
