@@ -5,7 +5,7 @@
 *Requested by the user on 2026-10-13 and left here by the agent working on Steady Timer.*
 
 The user installs and updates their personal Android apps through **Droid-ify**, reading a
-self-hosted F-Droid repo at <https://polymertheory.github.io/apps/fdroid/repo>. It is
+self-hosted F-Droid repo at <https://apps-repo.russell-k-w-spencer.workers.dev/fdroid/repo>. It is
 driven from the sibling project `../61-app_distribution`. **Whenever you ship a new
 version of the Android widget (`android/`), also publish it there**, so the update reaches
 the user's phone without adb or GitHub. The user has given standing permission for this; no
@@ -27,8 +27,9 @@ python appctl.py publish usage-widget
   the `versionCode` must be higher than the last published one, or Droid-ify won't offer it.
   Commit the bump here.
 - `publish` builds the signed release APK, adds it to the repo, regenerates and signs the
-  index, and pushes to the public `PolymerTheory/apps` repo. Afterwards the update shows up
+  index, and pushes to the private `PolymerTheory/apps` repo (served by a password-protected Cloudflare Worker). Afterwards the update shows up
   in Droid-ify under *Updates*.
+- The repo is private: GitHub `PolymerTheory/apps` is private and the files are served by a Cloudflare Worker behind a username/password (user `russell`; the password lives only in Cloudflare and the user's password manager). `publish` deploys the Worker itself. **Never write, request or log the repo password**, and never put it in a URL or QR code.
 - **Never publish a rebuild under an already-published `versionCode`.** The repo would then
   hold two different files claiming to be the same version.
 - Keep signing with `android/release.keystore`. That key is the one registered for Android
