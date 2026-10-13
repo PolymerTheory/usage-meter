@@ -24,7 +24,16 @@ data class Appearance(
     val widgetBgLight: Int? = null,
     val widgetBgDark: Int? = null,
     val iconBg: Int? = null,
+    /** [THEME_SYSTEM] follows the phone; [THEME_LIGHT]/[THEME_DARK] force one. */
+    val themeMode: Int = THEME_SYSTEM,
 ) {
+    /** Whether to draw dark, given what the system currently says. */
+    fun resolveDark(systemDark: Boolean): Boolean = when (themeMode) {
+        THEME_LIGHT -> false
+        THEME_DARK -> true
+        else -> systemDark
+    }
+
     fun colorFor(percent: Double?): Int = when {
         percent == null -> UNAVAILABLE
         percent < midThreshold -> lowColor
@@ -49,6 +58,9 @@ data class Appearance(
         const val DEFAULT_CARD_LIGHT = 0xFFFFFFFF.toInt()
         const val DEFAULT_CARD_DARK = 0xFF151B23.toInt()
         const val DEFAULT_ICON_BG = 0xFF0B0F14.toInt()
+        const val THEME_SYSTEM = 0
+        const val THEME_LIGHT = 1
+        const val THEME_DARK = 2
 
         /** Keep thresholds in 1..99 and strictly ordered so the UI can't wedge them. */
         fun clampThresholds(mid: Int, high: Int): Pair<Int, Int> {
@@ -93,6 +105,7 @@ object AppearanceStore {
             widgetBgLight = opt("widget_bg_light"),
             widgetBgDark = opt("widget_bg_dark"),
             iconBg = opt("icon_bg"),
+            themeMode = p.getInt("theme_mode", Appearance.THEME_SYSTEM).coerceIn(0, 2),
         )
     }
 
@@ -108,6 +121,7 @@ object AppearanceStore {
         a.widgetBgLight?.let { e.putInt("widget_bg_light", it) }
         a.widgetBgDark?.let { e.putInt("widget_bg_dark", it) }
         a.iconBg?.let { e.putInt("icon_bg", it) }
+        e.putInt("theme_mode", a.themeMode)
         e.apply()
     }
 }

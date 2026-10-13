@@ -43,9 +43,10 @@ The app's **Customize** section changes, everywhere at once (app + widget):
   Widget text automatically picks light or dark ink to stay readable.
 
 Each colour has a palette plus a hex field; backgrounds also offer **Default**.
-**Restore defaults** resets everything. Settings are stored apart from the sync
-credentials and are included in Android backup; the sync URL + token are
-excluded from Google cloud backup.
+**Restore defaults** resets everything. **Theme** (System / Light / Dark) forces
+the app — and the widget — into light or dark regardless of the phone setting.
+Settings (and the sync pairing) are included in Android backup, so a restored or
+new phone keeps both.
 
 **Two styles**, switched with the **Compact icon style** toggle in the app:
 

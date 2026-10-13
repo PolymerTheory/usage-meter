@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 and older. Never back up the sync bearer token or the cached
-     usage blob; appearance settings are fine to restore. -->
-<full-backup-content>
-    <exclude domain="sharedpref" path="usage_widget_prefs.xml" />
-    <exclude domain="file" path="last_usage.json" />
-</full-backup-content>

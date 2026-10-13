@@ -45,6 +45,9 @@ class AppearanceSettings(
         header("Customize")
         caption("Applies to both this screen and the home-screen widget.")
 
+        subheader("Theme")
+        themeToggle()
+
         subheader("Bar colors")
         colorRow("Low", a.lowColor, null) { commit(a.copy(lowColor = it ?: Appearance.DEFAULT_LOW)) }
         colorRow("Medium", a.midColor, null) { commit(a.copy(midColor = it ?: Appearance.DEFAULT_MID)) }
@@ -73,8 +76,11 @@ class AppearanceSettings(
 
     private fun commit(newA: Appearance, widgetToo: Boolean = true) {
         val rebuild = newA.isDefault != a.isDefault
+        val themeChanged = newA.themeMode != a.themeMode
         a = newA
         AppearanceStore.save(activity, a)
+        // Recreates the activity in the new mode; the widget follows via resolveDark.
+        if (themeChanged) applyNightMode(a.themeMode)
         onChanged(a, widgetToo)
         restoreButton?.isEnabled = !a.isDefault
         // Swatches/labels show the stored values, so redraw them after a pick.
@@ -83,17 +89,53 @@ class AppearanceSettings(
         }
     }
 
+    // ---- theme -------------------------------------------------------------
+
+    private fun themeToggle() {
+        val group = com.google.android.material.button.MaterialButtonToggleGroup(activity).apply {
+            isSingleSelection = true
+            isSelectionRequired = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(4) }
+        }
+        val modes = listOf(
+            "System" to Appearance.THEME_SYSTEM,
+            "Light" to Appearance.THEME_LIGHT,
+            "Dark" to Appearance.THEME_DARK,
+        )
+        for ((label, mode) in modes) {
+            val b = MaterialButton(activity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = label
+                id = View.generateViewId()
+                tag = mode
+            }
+            group.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (mode == a.themeMode) group.check(b.id)
+        }
+        group.addOnButtonCheckedListener { g, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val mode = g.findViewById<View>(checkedId).tag as Int
+            if (mode != a.themeMode) commit(a.copy(themeMode = mode))
+        }
+        container.addView(group)
+    }
+
     // ---- threshold sliders -------------------------------------------------
 
     private lateinit var midSlider: Slider
     private lateinit var highSlider: Slider
-    private lateinit var midLabel: TextView
-    private lateinit var highLabel: TextView
+    private lateinit var midField: EditText
+    private lateinit var highField: EditText
 
     private fun thresholdSliders() {
-        midLabel = caption("")
+        midField = percentRow("Medium from") { typed ->
+            Appearance.clampThresholds(typed, maxOf(a.highThreshold, typed + 1))
+        }
         midSlider = slider(1f, 98f, a.midThreshold.toFloat())
-        highLabel = caption("")
+        highField = percentRow("High from") { typed ->
+            Appearance.clampThresholds(min(a.midThreshold, typed - 1), typed)
+        }
         highSlider = slider(2f, 99f, a.highThreshold.toFloat())
         updateThresholdLabels()
 
@@ -109,6 +151,53 @@ class AppearanceSettings(
         }
     }
 
+    /**
+     * "Medium from [ 55 ] %" — a typed alternative to the slider. Applied when
+     * the keyboard's Done is pressed or the field loses focus; [resolve] turns
+     * the typed number into a valid, ordered (mid, high) pair, nudging the
+     * other threshold if needed, exactly like dragging the slider would.
+     */
+    private fun percentRow(title: String, resolve: (Int) -> Pair<Int, Int>): EditText {
+        val field = EditText(activity).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            filters = arrayOf(android.text.InputFilter.LengthFilter(2))
+            gravity = Gravity.CENTER
+            setSingleLine()
+            minEms = 2
+        }
+        val row = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(6) }
+            addView(TextView(activity).apply { text = title; textSize = 15f })
+            addView(field, LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+            addView(TextView(activity).apply { text = "%"; textSize = 15f })
+        }
+        container.addView(row)
+
+        fun apply() {
+            val typed = field.text?.toString()?.toIntOrNull()
+            if (typed == null) { updateThresholdLabels(); return }
+            val (m, h) = resolve(typed)
+            moveThresholds(m, h)
+            onChanged(a, true) // repaint the widget once for a typed value
+        }
+        field.setOnEditorActionListener { v, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                apply()
+                v.clearFocus()
+                (activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                    as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+                true
+            } else false
+        }
+        field.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) apply() }
+        return field
+    }
+
     private fun moveThresholds(mid: Int, high: Int) {
         syncing = true
         commit(a.copy(midThreshold = mid, highThreshold = high), widgetToo = false)
@@ -119,8 +208,9 @@ class AppearanceSettings(
     }
 
     private fun updateThresholdLabels() {
-        midLabel.text = "Medium from ${a.midThreshold}%"
-        highLabel.text = "High from ${a.highThreshold}%"
+        // Don't fight the user while they're typing in a field.
+        if (!midField.hasFocus()) midField.setText(a.midThreshold.toString())
+        if (!highField.hasFocus()) highField.setText(a.highThreshold.toString())
     }
 
     private fun slider(from: Float, to: Float, value: Float): Slider = Slider(activity).apply {
@@ -292,6 +382,17 @@ class AppearanceSettings(
             val t = s?.trim()?.removePrefix("#") ?: return null
             if (t.length != 6 || !t.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) return null
             return (0xFF000000 or t.toLong(16)).toInt()
+        }
+
+        /** Applies the app-wide light/dark override (process-global in AppCompat). */
+        fun applyNightMode(mode: Int) {
+            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                when (mode) {
+                    Appearance.THEME_LIGHT -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+                    Appearance.THEME_DARK -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+                    else -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                },
+            )
         }
 
         fun isNight(activity: AppCompatActivity): Boolean =

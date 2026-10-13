@@ -70,4 +70,12 @@ class AppearanceTest {
         assertEquals("3h", TimeFormat.shortCountdown(now + (3 * 60 + 12) * 60_000L + 30_000, coarse = true))
         assertEquals("2d4h", TimeFormat.shortCountdown(now + (52 * 60) * 60_000L + 30_000))
     }
+
+    @Test fun themeOverrideResolvesDark() {
+        assertTrue(Appearance(themeMode = Appearance.THEME_SYSTEM).resolveDark(systemDark = true))
+        assertFalse(Appearance(themeMode = Appearance.THEME_SYSTEM).resolveDark(systemDark = false))
+        assertFalse(Appearance(themeMode = Appearance.THEME_LIGHT).resolveDark(systemDark = true))
+        assertTrue(Appearance(themeMode = Appearance.THEME_DARK).resolveDark(systemDark = false))
+        assertFalse(Appearance(themeMode = Appearance.THEME_DARK).isDefault) // Restore defaults re-enables
+    }
 }

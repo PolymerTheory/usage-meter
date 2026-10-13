@@ -62,8 +62,11 @@ class UsageWidgetProvider : AppWidgetProvider() {
             val density = context.resources.displayMetrics.density
             val opts = mgr.getAppWidgetOptions(id)
             val (wPx, hPx) = widgetSizePx(opts, density)
-            val dark = (context.resources.configuration.uiMode and
+            val appearance = AppearanceStore.load(context)
+            val systemDark = (context.resources.configuration.uiMode and
                 Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            // The in-app Light/Dark override applies to the widget too.
+            val dark = appearance.resolveDark(systemDark)
 
             val config = ConfigStore.load(context)
             val usage = if (config == null) null else UsageRepository.cached(context)
@@ -74,7 +77,6 @@ class UsageWidgetProvider : AppWidgetProvider() {
             }
 
             val style = if (ConfigStore.iconStyle(context)) WidgetStyle.ICON else WidgetStyle.CARD
-            val appearance = AppearanceStore.load(context)
             val bitmap = WidgetRenderer.render(usage, wPx, hPx, density, dark, style, status, appearance)
 
             val views = RemoteViews(context.packageName, R.layout.widget_usage)

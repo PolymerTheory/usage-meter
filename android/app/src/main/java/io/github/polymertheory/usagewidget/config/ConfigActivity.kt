@@ -41,6 +41,9 @@ class ConfigActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Before super.onCreate, so a forced light/dark mode applies without a
+        // visible recreate.
+        AppearanceSettings.applyNightMode(AppearanceStore.load(this).themeMode)
         super.onCreate(savedInstanceState)
         binding = ActivityConfigBinding.inflate(layoutInflater)
         setContentView(binding.root)
