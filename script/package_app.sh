@@ -11,8 +11,19 @@ PRODUCT="UsageMeter"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-VERSION="${USAGE_METER_VERSION:-0.2.0}"
-BUILD_NUMBER="${USAGE_METER_BUILD_NUMBER:-200}"
+# Default to the newest version in the published update feed, so a plain local
+# build/install never claims to be older than what's released (the old fixed
+# default, 0.2.0, made Sparkle offer a "downgrade" update).
+LATEST_FEED_VERSION="$(grep -o '<sparkle:shortVersionString>[^<]*' "$ROOT_DIR/appcast.xml" 2>/dev/null | head -1 | sed 's/.*>//')"
+VERSION="${USAGE_METER_VERSION:-${LATEST_FEED_VERSION:-0.0.0}}"
+# Sparkle compares CFBundleVersion, not the version string. Derive it exactly as
+# release.sh does (major*10000 + minor*100 + patch); a fixed default of 200 made
+# every locally installed build look older than any release.
+if [[ -z "${USAGE_METER_BUILD_NUMBER:-}" && "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  BUILD_NUMBER="$((10#${BASH_REMATCH[1]} * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#${BASH_REMATCH[3]}))"
+else
+  BUILD_NUMBER="${USAGE_METER_BUILD_NUMBER:-1}"
+fi
 
 BUILD_CONFIG="release"
 for arg in "$@"; do
