@@ -713,17 +713,26 @@ final class UsageViewModel: ObservableObject {
     /// - Parameter force: user-initiated. Bypasses the coordination fast-path and
     ///   the readers' short caches so it really re-queries, shows a spinner, and
     ///   reports why if a provider comes back unusable.
+    /// True while any snapshot is being computed. A slow refresh must never
+    /// overlap the next timer tick: when one outlasted the 2-minute interval
+    /// they stacked up (each on its own core) and the app ran away.
+    private var refreshInFlight = false
+
     func refreshQuota(force: Bool = false) {
         if force {
             guard !isRefreshing else { return }
             isRefreshing = true
             refreshStatus = nil
+        } else if refreshInFlight {
+            return // the in-flight refresh will deliver a fresh snapshot
         }
+        refreshInFlight = true
         Task {
             let monitor = self.monitor
             let snapshot = await Task.detached(priority: .utility) {
                 monitor.snapshot(force: force)
             }.value
+            self.refreshInFlight = false
             self.fullSnapshot = snapshot
             self.applyDisplayFilter()
             if force {

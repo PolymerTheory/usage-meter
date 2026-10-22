@@ -70,16 +70,22 @@ public final class UsageMonitor: @unchecked Sendable {
             return reused
         }
 
-        let codexEvents = reader.readCodexEvents(root: codexRoot, now: now)
         // Prefer the live ChatGPT usage API (exact, current). Fall back to
         // local rate_limit log snapshots (which may be stale) and finally to
         // token estimates when nothing else is available.
+        //
+        // The token-estimate fallback needs every Codex session event from the
+        // last week. Those logs reached 2.2 GB / 353 files (2026-10-22), and
+        // parsing them on *every* refresh — even though the live API answered —
+        // pinned ~2.5 cores and grew the app to 3.8 GB, because each refresh
+        // outlasted the 2-minute timer and they stacked. So read them only in
+        // the last-resort branch, which in practice never runs.
         var codexUsage = codexAPIReader.readUsage(home: home, now: now)
             ?? reader.readLatestCodexDatabaseRateLimit(home: home, now: now)
             ?? reader.readLatestCodexRateLimit(root: codexRoot, now: now)
             ?? reader.summarize(
                 provider: .codex,
-                events: codexEvents,
+                events: reader.readCodexEvents(root: codexRoot, now: now),
                 now: now,
                 shortLimit: config.codex.shortLimitTokens,
                 longLimit: config.codex.longLimitTokens,

@@ -25,9 +25,23 @@ if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 fi
 
+# Ask SwiftPM where products land instead of hard-coding it: Xcode 27 / Swift
+# 6.4 moved them from .build/<triple>/release to .build/out/Products/Release, and
+# builds every --arch into that SAME directory. So copy each slice aside right
+# after building it (the next build overwrites it) and check its architecture.
+SLICES_DIR="$(mktemp -d)"
+trap 'rm -rf "$SLICES_DIR"' EXIT
 if [[ "$BUILD_CONFIG" == "release" ]]; then
-  swift build -c release --arch arm64 --product "$PRODUCT"
-  swift build -c release --arch x86_64 --product "$PRODUCT"
+  for arch in arm64 x86_64; do
+    swift build -c release --arch "$arch" --product "$PRODUCT"
+    bin_dir="$(swift build -c release --arch "$arch" --show-bin-path)"
+    cp "$bin_dir/$PRODUCT" "$SLICES_DIR/$PRODUCT-$arch"
+    actual="$(/usr/bin/lipo -archs "$SLICES_DIR/$PRODUCT-$arch")"
+    if [[ "$actual" != "$arch" ]]; then
+      echo "error: expected a $arch slice but $bin_dir/$PRODUCT is '$actual'" >&2
+      exit 1
+    fi
+  done
 else
   swift build
 fi
@@ -36,11 +50,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Frameworks" "$APP_DIR/Contents/Resources"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   /usr/bin/lipo -create \
-    "$ROOT_DIR/.build/arm64-apple-macosx/release/$PRODUCT" \
-    "$ROOT_DIR/.build/x86_64-apple-macosx/release/$PRODUCT" \
+    "$SLICES_DIR/$PRODUCT-arm64" \
+    "$SLICES_DIR/$PRODUCT-x86_64" \
     -output "$APP_DIR/Contents/MacOS/$APP_NAME"
 else
-  cp "$ROOT_DIR/.build/debug/$PRODUCT" "$APP_DIR/Contents/MacOS/$APP_NAME"
+  cp "$(swift build --show-bin-path)/$PRODUCT" "$APP_DIR/Contents/MacOS/$APP_NAME"
 fi
 
 SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build/artifacts" -path '*/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' -type d -print -quit 2>/dev/null)"
