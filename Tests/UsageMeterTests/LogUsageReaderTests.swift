@@ -344,6 +344,15 @@ final class LogUsageReaderTests: XCTestCase {
     /// republishing) must not be reused when the Claude entry inside it has
     /// gone stale — otherwise every device skips its Claude poll indefinitely
     /// and the shared Claude reading ages without bound.
+    /// A 429 must never freeze Claude for long: on 2026-11-06 the server sent
+    /// Retry-After: 3600 but recovered within ~24 minutes.
+    func testClaudeRateLimitBackoffIsCappedAtTenMinutes() {
+        XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: 3600), 10 * 60 + 15)
+        XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: nil), 10 * 60 + 15)
+        XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: 240), 240 + 15)
+        XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: 5), 2 * 60 + 15)
+    }
+
     func testCoordinationRejectsBlobWithStaleClaudeDespiteFreshBlobTimestamp() throws {
         let now = iso("2026-06-02T12:00:00.000Z")
         func provider(_ at: Date, percent: Double?, account: String? = nil) -> SharedProvider {

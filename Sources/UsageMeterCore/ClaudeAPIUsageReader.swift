@@ -80,7 +80,10 @@ public struct ClaudeAPIUsageReader {
                 ?? .failure(reason)
         }
 
-        if let rateLimit = activeRateLimit(home: home, now: now) {
+        // A user-initiated refresh probes once even during a backoff: the backoff
+        // is our own caution, and a single manual call can't meaningfully extend
+        // a ban. Timed refreshes keep respecting it.
+        if !force, let rateLimit = activeRateLimit(home: home, now: now) {
             return cachedUsage(home: home, now: now, fallbackReason: .rateLimited)
                 ?? .failure(.requestFailed("Claude OAuth usage API rate limited until \(rateLimit)"))
         }
@@ -542,8 +545,23 @@ public struct ClaudeAPIUsageReader {
               let until = json["until"] as? Double else {
             return nil
         }
-        let date = Date(timeIntervalSince1970: until)
+        var date = Date(timeIntervalSince1970: until)
+        // Older builds honored Retry-After for up to 2 hours. Never let a stored
+        // backoff outlast the current cap, measured from when it was written —
+        // otherwise a pre-upgrade 60-minute backoff would keep Claude frozen.
+        if let written = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date {
+            date = min(date, written.addingTimeInterval(Self.maxRateLimitBackoff + 15))
+        }
         return date > now ? date : nil
+    }
+
+    static let maxRateLimitBackoff: TimeInterval = 10 * 60
+
+    /// Seconds to wait after a 429: the server's Retry-After, kept within
+    /// 2 min…10 min, plus a small buffer so we don't retry a hair too early.
+    static func rateLimitBackoff(retryAfter: TimeInterval?) -> TimeInterval {
+        let base = retryAfter ?? maxRateLimitBackoff
+        return min(max(base, 2 * 60), maxRateLimitBackoff) + 15
     }
 
     private func recordRateLimit(home: URL, now: Date, retryAfter: TimeInterval?) {
@@ -552,12 +570,14 @@ public struct ClaudeAPIUsageReader {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        // Honor the server's Retry-After when present: polling again before it
-        // expires just earns another 429 and can extend the ban. Without a
-        // header, back off one refresh cycle. Clamp to a sane range and add a
-        // small buffer so we don't retry a hair too early.
-        let base = retryAfter ?? (5 * 60)
-        let backoff = min(max(base, 5 * 60), 2 * 60 * 60) + 15
+        // Back off after a 429, but cap it at 10 minutes even when Retry-After
+        // asks for more. On 2026-11-06 the server sent Retry-After: 3600, yet
+        // the endpoint answered 200 again within ~24 minutes — so honoring it
+        // left Claude frozen for an hour after a brief hiccup (and re-logging
+        // in couldn't help: it was never an auth problem). If the limit really
+        // persists, a probe every 10 minutes just re-arms this backoff — about
+        // six calls an hour, negligible.
+        let backoff = Self.rateLimitBackoff(retryAfter: retryAfter)
         let payload = ["until": now.addingTimeInterval(backoff).timeIntervalSince1970]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: url, options: [.atomic])
