@@ -240,6 +240,11 @@ public enum ClaudeHookInstaller {
             withIntermediateDirectories: true
         )
 
+        // Never replace a settings file that exists but doesn't parse: writing
+        // `[:] + hooks` back would wipe the user's Claude Code configuration.
+        if FileManager.default.fileExists(atPath: settingsURL.path), loadSettings(home: home) == nil {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: settingsURL.path])
+        }
         var root = loadSettings(home: home) ?? [:]
         var hooks = root["hooks"] as? [String: Any] ?? [:]
 

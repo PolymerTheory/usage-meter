@@ -66,6 +66,13 @@ public struct ClaudeAPIUsageReader {
     ///   short-lived cache so the call actually goes to the API. The rate-limit
     ///   backoff is still respected — forcing through a 429 would only extend it.
     public func readUsage(home: URL, now: Date = Date(), force: Bool = false) -> ReadResult {
+        // Prefer what a running Claude Code session just reported through its
+        // status line: it's current and costs no call to the shared,
+        // rate-limited usage endpoint (see ClaudeStatusLineFeed).
+        if let fed = ClaudeStatusLineFeed.latestUsage(home: home, now: now) {
+            return .success(fed)
+        }
+
         // Serve a very recent cached response as current instead of calling the
         // live API again, so bursts of snapshot() calls don't hammer the endpoint.
         if !force, let fresh = freshCachedUsage(home: home, now: now, maxAge: Self.minLiveInterval) {

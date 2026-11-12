@@ -429,6 +429,10 @@ enum UsageMeterMain {
                 state: arguments[2],
                 event: arguments[3]
             )
+            // (Hook input carries no rate limits — checked 2026-11-12: cwd, effort,
+            // hook_event_name, permission_mode, prompt_id, scratchpad_dir,
+            // session_id, tool_*, transcript_path — so hooks can't feed usage;
+            // only the status line can.)
             return true
         }
 
@@ -438,6 +442,29 @@ enum UsageMeterMain {
                 print("Claude activity hooks installed")
             } catch {
                 fputs("Failed to install Claude activity hooks: \(error)\n", stderr)
+            }
+            return true
+        }
+
+        // Claude Code's status-line command: store the rate limits it passes on
+        // stdin (UsageMeter's free, unrate-limited Claude source) and print the
+        // compact line Claude Code shows under the prompt. Must stay fast and
+        // never print errors — Claude Code runs it on every redraw.
+        if arguments == ["--statusline"] {
+            let input = FileHandle.standardInput.readDataToEndOfFile()
+            print(ClaudeStatusLineFeed.ingest(input))
+            return true
+        }
+
+        if arguments == ["--install-claude-statusline"], let executablePath = Bundle.main.executablePath {
+            do {
+                switch try ClaudeStatusLineInstaller.install(executablePath: executablePath) {
+                case .installed: print("Claude Code status line installed")
+                case .alreadyInstalled: print("Claude Code status line already installed")
+                case .keptExisting(let cmd): print("Kept your existing Claude Code status line (\(cmd)); not installed")
+                }
+            } catch {
+                fputs("Failed to install Claude Code status line: \(error)\n", stderr)
             }
             return true
         }

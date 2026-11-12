@@ -52,6 +52,8 @@ fi
 cp -R "$SOURCE_APP" "$TARGET_APP"
 
 "$TARGET_APP/Contents/MacOS/$APP_NAME" --install-claude-hooks
+# Feed Claude usage from Claude Code's status line (never replaces one the user set).
+"$TARGET_APP/Contents/MacOS/$APP_NAME" --install-claude-statusline
 # Install/refresh the LaunchAgent. This both starts the app now (via launchctl
 # bootstrap/kickstart) and keeps it running: it relaunches at login and within
 # seconds if it ever exits unexpectedly.

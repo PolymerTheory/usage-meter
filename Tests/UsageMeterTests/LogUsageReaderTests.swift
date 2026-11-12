@@ -346,6 +346,65 @@ final class LogUsageReaderTests: XCTestCase {
     /// and the shared Claude reading ages without bound.
     /// A 429 must never freeze Claude for long: on 2026-11-06 the server sent
     /// Retry-After: 3600 but recovered within ~24 minutes.
+    func testStatusLineFeedRoundTripsAndPrintsCompactLine() throws {
+        let home = try temporaryLogRoot()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let input = #"{"rate_limits":{"five_hour":{"used_percentage":41.2,"resets_at":1800003600},"seven_day":{"used_percentage":91,"resets_at":1800100000}}}"#
+        XCTAssertEqual(ClaudeStatusLineFeed.ingest(Data(input.utf8), home: home, now: now), "5h 41% · 7d 91%")
+
+        let usage = try XCTUnwrap(ClaudeStatusLineFeed.latestUsage(home: home, now: now.addingTimeInterval(60)))
+        XCTAssertEqual(usage.provider, .claude)
+        XCTAssertEqual(usage.shortWindow.usedPercent ?? -1, 41.2, accuracy: 1e-9)
+        XCTAssertEqual(usage.longWindow.usedPercent ?? -1, 91, accuracy: 1e-9)
+        XCTAssertEqual(usage.shortWindow.resetDate, Date(timeIntervalSince1970: 1_800_003_600))
+        XCTAssertFalse(usage.shortWindow.isStale)
+
+        // Older than maxAge: not trusted, so the reader falls back to the API.
+        XCTAssertNil(ClaudeStatusLineFeed.latestUsage(home: home, now: now.addingTimeInterval(ClaudeStatusLineFeed.maxAge + 1)))
+    }
+
+    func testStatusLineFeedZeroesAWindowThatRolledOver() throws {
+        let home = try temporaryLogRoot()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let input = #"{"rate_limits":{"five_hour":{"used_percentage":88,"resets_at":1800000060}}}"#
+        ClaudeStatusLineFeed.ingest(Data(input.utf8), home: home, now: now)
+        let usage = try XCTUnwrap(ClaudeStatusLineFeed.latestUsage(home: home, now: now.addingTimeInterval(120)))
+        XCTAssertEqual(usage.shortWindow.usedPercent ?? -1, 0, accuracy: 1e-9)
+        XCTAssertEqual(usage.longWindow.unitName, "unavailable")
+    }
+
+    func testStatusLineFeedIgnoresInputWithoutRateLimits() throws {
+        let home = try temporaryLogRoot()
+        XCTAssertEqual(ClaudeStatusLineFeed.ingest(Data(#"{"model":{"id":"x"}}"#.utf8), home: home), "")
+        XCTAssertEqual(ClaudeStatusLineFeed.ingest(Data("not json".utf8), home: home), "")
+        XCTAssertNil(ClaudeStatusLineFeed.latestUsage(home: home))
+    }
+
+    func testStatusLineInstallerNeverClobbersUserSettings() throws {
+        let home = try temporaryLogRoot()
+        let settings = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let exe = "/Apps/UsageMeter.app/Contents/MacOS/UsageMeter"
+
+        // Fresh install keeps other keys.
+        try #"{"model":"opus","hooks":{}}"#.write(to: settings, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try ClaudeStatusLineInstaller.install(executablePath: exe, home: home), .installed)
+        XCTAssertTrue(ClaudeStatusLineInstaller.isInstalled(executablePath: exe, home: home))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any])
+        XCTAssertEqual(root["model"] as? String, "opus")
+        XCTAssertEqual(try ClaudeStatusLineInstaller.install(executablePath: exe, home: home), .alreadyInstalled)
+
+        // The user's own status line is left alone.
+        try #"{"statusLine":{"type":"command","command":"~/my-line.sh"}}"#.write(to: settings, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try ClaudeStatusLineInstaller.install(executablePath: exe, home: home), .keptExisting("~/my-line.sh"))
+        XCTAssertFalse(ClaudeStatusLineInstaller.isInstalled(executablePath: exe, home: home))
+
+        // A corrupt settings file is never overwritten.
+        try "{ not json".write(to: settings, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try ClaudeStatusLineInstaller.install(executablePath: exe, home: home))
+        XCTAssertEqual(try String(contentsOf: settings, encoding: .utf8), "{ not json")
+    }
+
     func testClaudeRateLimitBackoffIsCappedAtTenMinutes() {
         XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: 3600), 10 * 60 + 15)
         XCTAssertEqual(ClaudeAPIUsageReader.rateLimitBackoff(retryAfter: nil), 10 * 60 + 15)
